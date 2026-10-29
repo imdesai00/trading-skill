@@ -1,0 +1,9 @@
+{
+  "rules": [
+    {"id": "opening-bell", "type": "opening_bell"},
+    {"id": "syntha-plan-stop", "symbol": "SYNTHA", "type": "stop", "price": 1408.0, "note": "plan stop: opening-range midpoint", "date": "2026-10-30"},
+    {"id": "syntha-plan-target", "symbol": "SYNTHA", "type": "target", "price": 1440.0, "note": "plan target: 3R", "date": "2026-10-30"},
+    {"id": "syntha-flat-by", "symbol": "SYNTHA", "type": "time", "at": "15:00", "label": "flat by 15:00", "date": "2026-10-30"},
+    {"id": "syntha-move-3", "symbol": "SYNTHA", "type": "pct_move", "pct": 3}
+  ]
+}
