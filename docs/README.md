@@ -4,6 +4,7 @@ Start here if you are new. Read the files in this order the first time; later, u
 
 | file | read it when |
 | --- | --- |
+| [HOW_TO_USE.md](HOW_TO_USE.md) | **start here**: the whole thing on one page, with what to say to Claude |
 | [GETTING_STARTED.md](GETTING_STARTED.md) | you have just downloaded the pack and want it running in an afternoon |
 | [DAILY_ROUTINE.md](DAILY_ROUTINE.md) | you want to know exactly what to do each trading day, and each Friday |
 | [SKILLS.md](SKILLS.md) | you want to know what each of the 15 skills does and its commands |
