@@ -42,7 +42,12 @@ import os
 import re
 import sys
 
-NEUTRAL_FIELDS = ("symbol", "exchange", "side", "qty", "product", "entry_type", "limit_price", "stop", "target")
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import db  # noqa: E402  (a copy of trader-db/db.py; a test keeps the copies identical)
+
+NEUTRAL_FIELDS = ("symbol", "exchange", "side", "qty", "product", "entry_type", "limit_price", "stop", "target",
+                  "action", "order_ref")
 YES_WORDS = ("yes", "y")
 BATCH_WORDS = {"all", "every", "everything", "rest", "remaining", "them", "both", "batch", "each"}
 DOUBT_WORDS = {"no", "not", "dont", "don't", "wait", "cancel", "stop", "but", "maybe", "later",
@@ -245,6 +250,13 @@ def plain_parts(order):
     """The ticket in plain words, one part per line."""
     side = str(order.get("side", "")).upper()
     sym = order.get("symbol", "?")
+    if order.get("action") == "cancel":
+        return ["CANCEL the resting stop-loss order %s for %s %s on NSE (intraday MIS)" % (
+            order.get("order_ref"), _q(order.get("qty")), sym),
+            "this takes the stop away: sell the shares yourself next, or you hold them unprotected"]
+    if side == "SELL" and order.get("entry_type") == "stop":
+        return ["SELL %s %s on NSE, stop-loss: sells at market if the price falls to %.2f, intraday (MIS)" % (
+            _q(order.get("qty")), sym, _f(order.get("stop")))]
     how = "limit %.2f" % _f(order["limit_price"]) if order.get("entry_type") == "limit" else "market"
     parts = ["%s %s %s on NSE, %s, intraday (MIS)" % (side, _q(order.get("qty")), sym, how)]
     if side == "BUY":
@@ -265,7 +277,7 @@ def plain(order):
 
 def amount_numbers(order):
     nums = []
-    for k in ("qty", "limit_price", "stop", "target"):
+    for k in ("qty", "limit_price", "stop", "target", "order_ref"):
         v = _f(order.get(k))
         if v is not None:
             nums.append(v)
@@ -373,13 +385,13 @@ def render(order, idx, total, cfg, risk, state, today):
     lines.append("  " + label)
     for w in (rv or {}).get("warnings", []):
         lines.append("  note: " + w)
-    kite = order.get("kite") or {}
-    if mode == "live" and kite.get("entry"):
-        lines.append("  Claude will call the Kite place_order tool with exactly:")
-        for l in json.dumps(kite["entry"], indent=2).splitlines():
+    if mode == "live":
+        call = live_call(order, cfg)
+        lines.append("  Claude will call the Kite %s tool with exactly:" % call["tool"])
+        for l in json.dumps(call["arguments"], indent=2).splitlines():
             lines.append("    " + l)
-        if kite.get("stop_after_fill"):
-            lines.append("  After it fills, the stop is a second order with its own yes and its own card.")
+        if order.get("side") == "buy":
+            lines.append("  After it fills, the stop-loss is a second order with its own ticket, yes and card.")
     elif mode == "paper":
         lines.append("  After your yes the paper broker records it: filled at the next 1-minute bar's open plus "
                      "slippage, with full charges.")
@@ -391,12 +403,18 @@ def render(order, idx, total, cfg, risk, state, today):
     return "\n".join(lines), ready
 
 
+def live_call(order, cfg):
+    """The exact Kite call for this order, built by the adapter from the order's own fields."""
+    import kite
+    return kite.build_call(order, cfg)
+
+
 def ticket_json(order, idx, cfg, risk, state, today):
     mode = mode_of(cfg)
     ready, label, rv = status_of(order, risk, state, today, mode)
     loss, stop = max_loss(order)
     return {"index": idx, "ready": ready, "status": label, "plain": plain(order), "mode": mode,
-            "fingerprint": fingerprint(order), "kite": (order.get("kite") or {}) if mode == "live" else None,
+            "fingerprint": fingerprint(order), "kite": live_call(order, cfg) if mode == "live" else None,
             "why": order.get("why", ""), "max_loss": loss, "stop": stop, "target": _f(order.get("target"))}
 
 
@@ -460,21 +478,37 @@ def cmd_approve(a):
         return 1
     loss, stop = max_loss(order)
     mode = mode_of(cfg)
+    entry = kind_of(order, rv) == "entry"
+    if entry:
+        blocks = db.control_blocks(a.config, mode, today, db.default_path(a.state))
+        if blocks:
+            raise TicketError("; ".join(blocks))
+        if not (a.why or "").strip():
+            raise TicketError("before the yes, ask the user: \"Why are you taking this trade?\" and pass their "
+                              "answer with --why \"...\". It is stored with the trade.")
     rec = {"at": ist_iso(now), "date": today, "index": a.index, "fingerprint": fingerprint(order),
            "symbol": str(order.get("symbol", "")).upper(), "side": order.get("side"),
            "qty": order.get("qty"), "kind": kind_of(order, rv), "max_loss": loss, "stop": stop,
            "plain": plain(order), "status": "approved", "reply": a.reply, "mode": mode}
+    if (a.why or "").strip():
+        rec["why"] = a.why.strip()
+    if mode == "live":
+        import kite
+        rec["payload_hash"] = kite.payload_hash(kite.build_call(order, cfg))
     state.setdefault("orders", []).append(rec)
+    dbp = db.default_path(a.state)
+    if db.exists(dbp):
+        db.record_decision(dbp, rec, order, rec.get("why"), now)      # the permanent, tamper-evident record
     write_json(a.state, state)
     print("Recorded your yes for order %d: %s." % (a.index, plain(order)))
     if mode == "paper":
         print("Paper mode: no broker is contacted. Record the paper trade: python3 trader-broker/paper.py open "
               "--index %d" % a.index)
     else:
-        print("Now call the Kite place_order tool with exactly:")
-        print(json.dumps((order.get("kite") or {}).get("entry") or {}, indent=2))
-        print("Claude's card shows Allow once / Deny. Then: ticket.py result --index %d --status "
-              "placed|denied|failed" % a.index)
+        print("Now run kite.py prepare --index %d --open-orders <the saved get_orders result>: it checks every gate "
+              "and prints the one Kite call to make." % a.index)
+        print("Claude's card then shows Allow once / Deny. Afterwards: kite.py record --index %d --order-id ID "
+              "(or --failed / --denied)." % a.index)
     return 0
 
 
@@ -485,6 +519,9 @@ def cmd_decline(a):
            "symbol": str(order.get("symbol", "")).upper(), "side": order.get("side"),
            "plain": plain(order), "status": "declined", "reply": a.reply or "no", "mode": mode_of(cfg)}
     state.setdefault("orders", []).append(rec)
+    dbp = db.default_path(a.state)
+    if db.exists(dbp):
+        db.record_decision(dbp, rec, None, None, now)
     write_json(a.state, state)
     print("Recorded: you said no to order %d (%s). Nothing was sent." % (a.index, plain(order)))
     return 0
@@ -494,25 +531,8 @@ def cmd_result(a):
     orders, cfg, risk, state, today, now = _load(a)
     if mode_of(cfg) != "live":
         raise TicketError("result is for live orders only; paper trades are recorded by paper.py")
-    order = _pick(orders, a.index)
-    fp = fingerprint(order)
-    rec = latest(state, fp, today)
-    if not rec or rec.get("status") != "approved":
-        raise TicketError("order %d has no yes recorded today; a result can only follow an approval" % a.index)
-    new = {"at": ist_iso(now), "date": today, "index": a.index, "fingerprint": fp, "symbol": rec["symbol"],
-           "side": rec["side"], "plain": rec["plain"], "status": a.status, "mode": "live"}
-    for k in ("qty", "kind", "max_loss", "stop"):
-        if rec.get(k) is not None:
-            new[k] = rec[k]
-    if a.broker_id:
-        new["broker_order_id"] = a.broker_id
-    if a.note:
-        new["note"] = a.note
-    state["orders"].append(new)
-    write_json(a.state, state)
-    print("Recorded order %d as %s. A failed order is never retried without a new check and a new yes."
-          % (a.index, a.status))
-    return 0
+    raise TicketError("live results are recorded with kite.py record (it also updates the live ledger and uses "
+                      "the yes up): kite.py record --index %d --order-id ID" % a.index)
 
 
 def cmd_flatten(a):
@@ -588,6 +608,7 @@ def main(argv=None):
     common(p)
     p.add_argument("--index", type=int, required=True)
     p.add_argument("--reply", required=True, help="the user's reply, word for word")
+    p.add_argument("--why", help="the user's answer to \"Why are you taking this trade?\" (required for entries)")
     p = sub.add_parser("decline", help="record a no")
     common(p)
     p.add_argument("--index", type=int, required=True)

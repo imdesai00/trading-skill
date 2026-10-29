@@ -24,7 +24,9 @@ the size: the further away the stop, the fewer shares. Charges are part of
 the loss: on a ₹63,000 position a round trip costs about ₹67 with Zerodha, so
 they are counted before anything else. It writes a proposal only.
 
-`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
+`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives). If your Claude does not
+set that variable, use the path of the folder this SKILL.md is in. Run every command from your working
+folder (the one that holds `trader/`), not from inside the skill folder.
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/size.py" init                   # trader/config.json with your limits, once
@@ -137,6 +139,14 @@ charges; reward:risk 3.00 before charges, 1.93 after. With a 2R target
 It never places, approves or schedules an order, never raises a limit on its
 own, never shrinks a stop to fit more shares, and never sizes F&O, margin or
 short positions.
+
+## Added (database edition)
+
+- `size.py init` writes the limits as **percent of capital** (`limits_pct`; the rupee values are derived) and creates
+  `trader/trader.db`. Only `control.py` (with the user's yes) or the user's own edit changes them.
+- Sizing uses the same **half-size** and **protection** rules as trader-risk (results day, events, VIX, the first live
+  weeks, ASM/GSM, MIS list), so the order you are shown is one the risk check will accept. It says when it halved
+  the risk and why.
 
 ## Safety
 

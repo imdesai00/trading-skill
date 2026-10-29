@@ -29,7 +29,9 @@ every time:
 
 No yes, no order. Paper mode keeps gates 1 and 2 so the practice is real.
 
-`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
+`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives). If your Claude does not
+set that variable, use the path of the folder this SKILL.md is in. Run every command from your working
+folder (the one that holds `trader/`), not from inside the skill folder.
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/ticket.py" show                     # every ticket, READY or not
@@ -44,9 +46,16 @@ python3 "${CLAUDE_SKILL_DIR}/ticket.py" log
 is a real yes for that order, builds the exit ticket, and keeps the log in
 `trader/state/broker.json`. `--now "2026-10-30 09:51"` pins the clock (India time).
 
-The paper broker (`paper.py`: fills, end-of-day reconcile, skipped signals)
-and the Kite adapter (`kite.py`, disabled unless live) are added in the next
-build phases; their steps will be here.
+```bash
+python3 "${CLAUDE_SKILL_DIR}/paper.py" open --index 1            # after your yes: book the paper trade
+python3 "${CLAUDE_SKILL_DIR}/paper.py" reconcile                 # replay the bars: stop, target or flat-by
+python3 "${CLAUDE_SKILL_DIR}/paper.py" skip --index 1            # a no or a BLOCK: log the skipped signal
+python3 "${CLAUDE_SKILL_DIR}/paper.py" skip --from-plan          # a trade trader-budget refused
+python3 "${CLAUDE_SKILL_DIR}/paper.py" status                    # the paper account
+```
+
+`paper.py` is the paper broker: it never contacts a broker. The Kite adapter
+(`kite.py`, disabled unless live) comes in a later build phase.
 
 ## What it reads and writes
 
@@ -56,6 +65,8 @@ build phases; their steps will be here.
 | `trader/config.json` | `mode` and `kite_enabled`, which only you change |
 | `trader/state/risk.json` | trader-risk's verdicts; only a PASS from today, in the same mode, is READY |
 | `trader/state/broker.json` | every yes, no, placed and failed, word for word |
+| `trader/state/paper.json` | the paper account: balance, every paper trade, every skipped signal (trader-risk reads it) |
+| `trader/timemachine.json` | the time machine's odds, copied into the paper trade |
 
 ## Steps: the entry
 
@@ -67,11 +78,43 @@ build phases; their steps will be here.
    If it prints "Not recorded", the reply was not an explicit yes for this
    order (for example "sure", "yes to all", or a yes that names a different
    stock or amount). Ask again. Never turn a reply into a yes yourself.
-4. Paper mode: no broker is contacted; the paper broker records the trade.
+4. Paper mode: no broker is contacted. Run `paper.py open --index N` to book it.
    Live mode: call the Kite `place_order` tool with exactly the payload the
    ticket printed; Claude's card appears: Allow once or Deny. Then
    `ticket.py result`. A failed order is not retried without a new check and a new yes.
-5. If the user says no, `ticket.py decline`: it is logged as a skipped signal.
+5. If the user says no, `ticket.py decline`, then `paper.py skip --index N`. A BLOCK from trader-risk
+   gets `paper.py skip --index N` too, and a plan trader-budget refused gets `paper.py skip --from-plan`.
+6. After 15:30: `paper.py reconcile`. Read the result back: the exit, gross, charges, net, R, the balance,
+   and every note (a fill worse than planned, a gap, a stop and target in one bar).
+
+## Paper trading: how a paper trade is filled
+
+| step | rule |
+| --- | --- |
+| entry | after your yes, `paper.py open` books it; it fills at the OPEN of the first 1-minute bar that starts at or after your yes, plus 0.05 % |
+| exits | `paper.py reconcile` walks the 1-minute bars from the entry bar on. The stop is checked before the target; a bar that touches both counts as the STOP |
+| stop | fills at the stop, or at the bar's open if the bar opened below it (a gap), minus 0.05 % |
+| target | fills at the target, minus 0.05 %, never better |
+| flat-by | still open at 15:00: the close of the last bar that ends by 15:00, minus 0.05 % |
+| your own exit | a yes to an exit ticket closes it at the next 1-minute bar's open, minus 0.05 % |
+| charges | the full Zerodha intraday charges on both legs (trader-budget/charges.py) |
+| record | Trade ID (PT-YYYYMMDD-NN), fills, exit reason, gross, charges, net, R, the loss planned at the stop, the time machine's odds, the risk verdict, news tags, your exact words, the balance after |
+
+A paper trade can lose more than the ₹500 planned when the fill comes in above
+the planned entry or the price gaps through the stop. The record says so, in
+plain words, with the amount. That is what live trading does too.
+
+Reconcile the same day, after 15:30: Yahoo keeps only about a week of 1-minute
+bars. `--interval 5m` replays on 5-minute bars when the 1-minute bars are gone,
+and the trade is noted as replayed on 5-minute bars. Run during the day, it
+only uses bars that have closed and leaves a trade open if nothing hit.
+
+**Skipped signals.** When you say no, or trader-risk blocks an order, or
+trader-budget refuses a plan, log it: `paper.py skip --index N` (or
+`--from-plan`). reconcile replays it the same way from the moment you skipped
+it and records what it would have made or lost after charges. It never touches
+the balance. Over four weeks this is how you compare your judgement with the
+system's.
 
 ## Steps: while it is open, and out by 15:00
 
@@ -86,6 +129,24 @@ build phases; their steps will be here.
 - Zerodha squares off MIS positions in closing-auction stocks at 15:12 (and
   others at 15:25), and may charge for it (the charge was not verified).
   Being flat by 15:00 avoids that.
+
+## The Kite adapter (`kite.py`, off unless live and enabled)
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/kite.py" check --profile FILE        # is Kite connected and verified today?
+python3 "${CLAUDE_SKILL_DIR}/kite.py" prepare --ticket ID         # exact place_order payload, after every gate
+python3 "${CLAUDE_SKILL_DIR}/kite.py" record --ticket ID --response FILE
+python3 "${CLAUDE_SKILL_DIR}/kite.py" stop-ticket --trade ID      # after the entry fills: the SL-M stop to approve
+python3 "${CLAUDE_SKILL_DIR}/kite.py" sync --orders F --trades F --positions F
+```
+
+A live trade is three separate orders, each with its own trader-risk check, its own typed
+"yes" and Claude's own Allow once card: (1) the entry BUY (MIS); (2) after it fills, a resting
+SL-M stop SELL; (3) the exit: cancel the stop first (that cancel needs its own yes), then a
+market SELL. The target is not a resting order. With the switches off, `kite.py` makes no Kite
+call at all (exit code 2). Act on every WARNING that `sync` prints (no stop, rejected stop,
+position mismatch) at once. The hosted `mcp.kite.trade` server probably has no `place_order`:
+see "Connecting Kite later".
 
 ## Connecting Kite later (only you do this)
 
@@ -112,6 +173,29 @@ The full steps come with the Kite adapter. The outline, from VERIFY.md:
 - Never asks for, reads, stores or repeats API keys, secrets or access tokens.
 - Never switches `"mode"` or `"kite_enabled"`. You do that yourself.
 - Never promises a fill price: a market order and a stop fill at whatever the market gives.
+
+## The database, the "why", and the live steps (added)
+
+- **Ask "Why are you taking this trade?" before the yes** and pass the user's answer with
+  `ticket.py approve ... --why "..."`. It is required for entries and is stored with the approval and the trade.
+  After an exit, ask "How did you feel about it?" and save it: `paper.py feel --trade ID --text "..."`.
+- With `trader/trader.db` present, every yes or no (the user's exact words), every order and its status
+  changes, every fill and every trade are written to the database as well (see trader-db). `paper.py reconcile`
+  makes a dated backup by itself afterwards.
+- **Kill switch and pause.** If `trader/STOP` exists or trading is paused, `approve`, `paper.py open` and
+  `kite.py prepare` refuse a new entry. Exits are never blocked.
+- **Live entries use Kite's own price and cash.** Before `kite.py prepare` for an entry, call `get_ltp` and
+  `get_margins` and save the results; pass them with `--ltp` and `--margins`. If Kite's last price is more than
+  0.3% from the planned entry, the yes is used up, nothing is placed, and the user must run trader-risk again
+  (`kite.py prices --ltp FILE` saves Kite's price for it) and say yes again. The cash must cover the whole
+  order: leverage is off.
+- `kite.py check` now needs `--margins`, `--positions` and `--tools-need-approval`, which the user passes only
+  after confirming every Kite order tool is set to "Needs approval" in Claude. It fails on an unexpected open
+  position. Remind the user that Kite's login expires every day.
+- **After the close, live:** `kite.py reconcile --orders-file F --trades-file F --positions-file F --margins F`
+  compares Kite with the record. Kite always wins: every difference is printed and written to the
+  discrepancies table, never silently fixed. When the contract note arrives, `kite.py set-charges --trade ID
+  --amount X` replaces the estimated charges with the real ones (marked "actual").
 
 ## Safety
 

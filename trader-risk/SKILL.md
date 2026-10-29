@@ -23,7 +23,9 @@ The Risk Manager is the gate between a proposal and the broker, paper or
 live. A BLOCK is final for that order: it is not shown to you for a yes. These
 limits keep each loss and each day's losses small. They do not make a trade win.
 
-`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
+`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives). If your Claude does not
+set that variable, use the path of the folder this SKILL.md is in. Run every command from your working
+folder (the one that holds `trader/`), not from inside the skill folder.
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/check.py"                           # trader/ files; writes trader/state/risk.json
@@ -113,6 +115,24 @@ BLOCK, the drawdown pause is on.
 It never places an order, never edits an order to make it pass, never loosens
 a limit, never blocks a sell that only gets you out, and never treats a PASS
 as your yes.
+
+## Added rules (database edition)
+
+Besides the limits above, `check.py` now enforces, for every entry:
+
+- **Limits as a percent of capital** (`limits_pct` in the config). A hand-edited rupee value that disagrees is
+  overruled and reported.
+- **Kill switch and pause**: the file `trader/STOP`, or `control.py pause`, blocks every new entry.
+- **Losing-streak brake**: 2 losing exits in a row today means no new entries today. **Cooldown**: no entry for
+  15 minutes after a losing exit.
+- **Half size** (the per-trade loss limit is halved, once, not per reason): results day for that stock, RBI policy
+  day or other event in `events.json`, Union Budget day, index expiry day, India VIX above 20, a NIFTY gap above
+  1%. India VIX above 25: no entries. The first 2 live weeks run at 50%.
+- **Stock protections**: ASM/GSM stocks, stocks not MIS-eligible, and prices within 2% of the upper or lower
+  circuit are blocked. These need the files in `trader/state/` (see docs/DATA_FILES.md). Missing or old files are a
+  WARNING in paper mode and a BLOCK in live mode (`protection_data_required`).
+- **Stale data**: a price older than 3 minutes blocks an entry.
+- Every verdict is also recorded in the database (risk_verdicts), and a hand edit of the config is logged.
 
 ## Safety
 

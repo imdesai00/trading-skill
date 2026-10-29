@@ -219,6 +219,19 @@ RSS feeds are plain public files, so trader-news and trader-insider will try
 them; if they fail on your machine, the tools say so and fall back to Yahoo
 headlines only.
 
+### Moneycontrol and Groww (your request of 2026-10-29)
+
+| source | finding | status |
+| --- | --- | --- |
+| Moneycontrol RSS | Section feeds at `https://www.moneycontrol.com/rss/<section>.xml`: `latestnews`, `business`, `marketreports`, `economy`, `results`, `iponews`, `buzzingstocks` (names from third-party directories and an old GitHub code sample). They are market-wide feeds, not one feed per stock, so a headline is matched to your symbols by the company's name. | **UNVERIFIED**: moneycontrol.com could not be fetched from the sandbox, the feed list page was not read, and the terms of use for the feeds were not seen. Personal, non-commercial reading is assumed. RECHECK on your machine. |
+| Groww news | groww.in/stock-feed is a web page with no public RSS or news API found. Groww's Trade API (₹499 a month + taxes) is for market data and orders, not news. A Groww Blog "stocks" feed exists in directories, but it is educational articles, not news. | **No stable public news source.** Reading groww.in/stock-feed would mean scraping a web page, which your rules rule out. Not built. |
+
+Sources: https://feeder.co/discover/01b3ab436c/moneycontrol-com,
+https://www.einpresswire.com/world-media-directory/detail/25453,
+https://gist.github.com/cd55ff5a4416e766803a13c078a08b88,
+https://rss.feedspot.com/Moneycontrol_rss_feeds/, https://groww.in/stock-feed,
+https://groww.in/trade-api.
+
 ## 11. Assumptions made while building (Phase 2, 2026-10-29)
 
 | assumption | where | status |
@@ -230,6 +243,48 @@ headlines only.
 | The live stop is an `SL-M` sell with `market_protection: -1`, placed after the entry fills (config `stop_order_type`, `SL` with a limit 0.5 % below also possible) | trader-budget Kite payload | RECHECK-AT-KITE: whether Zerodha accepts SL-M on NSE equity MIS via the API today |
 | The paper slippage (0.05 % a side) is counted in the ₹500 max loss and the 1.5 reward:risk (`limits_include_slippage: true`) | trader-budget, trader-risk | a design choice, yours to change; see PLAN.md |
 | Yahoo's spark (batch) endpoint is not used for `.NS`: one chart request per symbol | scanner | avoids an unverified endpoint; NIFTY 100 is about 100 requests |
+
+## 12. Assumptions made while building news, results and insider (Phase 6, 2026-10-29)
+
+None of these could be fetched from the build sandbox. Every fixture for them is SYNTHETIC (symbols SYNTHA to SYNTHG, example.invalid links), so the tests prove the code, not the feeds.
+
+| item | what the code assumes | status |
+| --- | --- | --- |
+| Yahoo headline RSS for `.NS` | `https://feeds.finance.yahoo.com/rss/2.0/headline?s=RELIANCE.NS&region=IN&lang=en-IN` returns standard RSS 2.0 with `item/title/link/guid/pubDate`. The old US feed used `region=US`; `region=IN` is a guess. | UNVERIFIED. If it returns nothing for Indian symbols, trader-news prints a note and the other feeds still run. |
+| NSE announcements RSS | Standard RSS 2.0; the title starts with the symbol, then the company and the subject. The matching also works when it does not. | UNVERIFIED (URL from a third-party list). |
+| Moneycontrol RSS | Section feeds as in section 10, standard RSS 2.0, `pubDate` with a zone. Market-wide: matched by symbol or company name. Personal reading only. | UNVERIFIED. Terms of use not read. |
+| Groww | No public news feed; not read. | Not built. |
+| Name matching | A symbol of 4 or more letters matches as a bare capitalised word; shorter symbols only as `(SYM)`, `NSE: SYM` or the full company name. A first word that starts two of your companies' names, or a common word (Tata, Bank, India ...), is never used alone. A name-only match is shown as POSSIBLE. | Design choice, tested. It will miss some stories (a bare "ITC") and show some false POSSIBLEs. |
+| Results today | Any item for your symbol tagged results or board meeting and dated today (IST) raises RESULTS TODAY. It cannot see a results date that has not been announced yet. | Design choice. Warning only: trader-risk does not read it. |
+| Results table text | Rows labelled revenue from operations / net sales, other income, total income, total expenses, exceptional items, profit before tax, tax, net profit / profit for the period, basic EPS, with the numbers after the label; column order from date headers, else assumed current, previous quarter, year ago. | Written from the usual layout of Indian quarterly results; not tested on a real filing. The report says when it assumed the order. |
+| Insider CSV columns | Found by words in the header (SYMBOL, NAME OF THE PERSON, CATEGORY OF PERSON, NO. OF SECURITIES, VALUE OF SECURITY, TRANSACTION TYPE, MODE OF ACQUISITION, DATE OF ALLOTMENT/ACQUISITION FROM, DATE OF INITIMATION, BROADCAST DATE). The names are from memory of NSE's export, not from a file. | UNVERIFIED. A missing required column stops the import and prints the columns that were there. |
+| Insider RSS | `https://nsearchives.nseindia.com/content/RSS/Insider_Trading.xml` gives notices (title and link), not the numbers. | UNVERIFIED (section 10). |
+| Disclosure deadline | "About two trading days" to disclose, used only to mark a gap as late. | SECONDARY: from the SEBI PIT Regulations as commonly summarised; the regulation text was not read here. |
+| Moneycontrol and Yahoo times | Items with no time zone are taken as India time. | Assumption. |
+
+## 13. What the whole build did NOT test against reality
+
+No real NSE, Yahoo, Moneycontrol, Zerodha or Notion call was made by the tests. Real calls happen first on your machine. The first things to look at: `scan.py universe` (did the CSVs download and parse?), one `entry.py check` on a real symbol after 09:35, `news.py` (which of the three feeds answered?), the first Notion sync (did the database schema create?), and `alerts.py quote RELIANCE` against Kite's price. `tests/capture.py` saves real Yahoo bars so the synthetic fixtures can be replaced.
+
+## 14. Protection data, expiry day and the Kite order-read figures (database edition, 2026-10-29)
+
+Searched on 2026-10-29. The sandbox could not open any of these sites, so none was fetched; every line is SECONDARY or UNVERIFIED.
+
+| item | what the code assumes | status |
+| --- | --- | --- |
+| Price bands (circuit limits) | NSE publishes a "Complete List of Price Bands" CSV: a third-party project lists `https://nsearchives.nseindia.com/content/equities/sec_list_ddmmyyyy.csv`; NSE's daily price bands page offers it. `scan.py protect --bands FILE` reads a CSV you download, finding the symbol and band columns by name, "No Band" meaning none. A circuit price is yesterday's close x (1 +/- band%). | UNVERIFIED URL and columns. Stocks with derivatives have no stock-level band. |
+| ASM / GSM lists | NSE's reports pages (nseindia.com/reports/gsm and the ASM page) publish them. No official CSV link was found; circulars are PDFs. `scan.py protect --asm FILE --gsm FILE` reads a list of symbols you export or copy into a file. | UNVERIFIED. No automatic download is built, on purpose (NSE's site needs a browser session). |
+| MIS-eligible list | Zerodha publishes its margin and MIS list on its website (the margin calculator). No machine-readable official source was found. `scan.py protect --mis FILE` reads a symbol list you export. | UNVERIFIED. If a stock is not on it, the broker refuses the MIS order. |
+| NIFTY weekly expiry day | Tuesday since the September 2025 contracts (NSE revised it from Thursday; sources differ on the exact start date and circular number). Configurable: `index_expiry_weekday` (Monday is 0). | SECONDARY (news and broker blogs), not read from the NSE circular. |
+| Union Budget day | 1 February by default (`budget_day`, "02-01"). The real date is announced each year. | Assumption. |
+| RBI policy days | Not built in. Put them in `trader/state/events.json` or `event_days` in the config yourself. | You maintain them. |
+| India VIX and NIFTY on Yahoo | `^INDIAVIX` and `^NSEI` v8 chart symbols; the gap is the first 5-minute bar's open against the chart's previous close. | UNVERIFIED symbols. `scan.py market --vix X --gap Y` types them in. |
+| Kite `get_ltp` result | `{"NSE:SYMBOL": {"last_price": x}}`, as in the Kite Connect quote API. | UNVERIFIED for the MCP server's own output; the reader also accepts `{"SYMBOL": x}`. RECHECK-AT-KITE. |
+| Kite `get_margins` result | `equity.available.live_balance` (else `cash`, else `net`), as in the Kite Connect margins API. | UNVERIFIED for the MCP output. RECHECK-AT-KITE. |
+| Kite `get_positions` result | `{"net": [{"tradingsymbol", "product", "quantity"}]}`. | UNVERIFIED for the MCP output. RECHECK-AT-KITE. |
+| Whether Claude can confirm "Needs approval" | A script cannot read Claude's tool-permission settings. `kite.py check` therefore refuses to verify until you pass `--tools-need-approval` yourself. | By design. |
+| Contract-note charges | Entered by hand: `kite.py set-charges`. No contract-note parser is built. | Not built. |
+| Cover orders and GTT for MIS | Still unverified (section 2). The live design is entry, a resting SL-M stop after the fill, and a new order for the target or flat-by. A target is not a resting order. | Different from "CO or GTT OCO" in your spec; see docs/AUDIT.md. |
 
 ## Items to re-check when you connect Kite (RECHECK-AT-KITE)
 
@@ -245,3 +300,7 @@ headlines only.
 10. Tick size per symbol from Kite's instrument list, against the NSE band table.
 11. Whether `SL-M` (with `market_protection`) is accepted for an NSE equity MIS stop-loss sell; if not, set
     `"stop_order_type": "SL"` in your config.
+12. The real shapes of the MCP `get_ltp`, `get_margins` and `get_positions` results (section 14): the 0.3% price check,
+    the cash check, `kite.py check` and `kite.py reconcile` read them.
+13. Whether the Kite MCP server you use returns order, trade and position fields with the names the adapter reads
+    (`order_id`, `status`, `average_price`, `filled_quantity`, `tradingsymbol`, `transaction_type`, `quantity`).

@@ -1,19 +1,20 @@
 import json
+import sys
 import os
 import re
 import unittest
 
 from _load import ROOT
 
-# v2, the day-trading pack: the eleven folders the reel's repo card shows
+# the India day-trading pack: thirteen skill folders
 SKILLS = ["trader-scanner", "trader-news", "trader-entry", "trader-exit", "trader-timemachine",
           "trader-risk", "trader-budget", "trader-broker", "trader-alerts", "trader-analyst",
-          "trader-pelosi"]
-ABOUT = ("11 Claude skills for day trading: scan thousands of charts, track breaking news, time every "
-         "entry and exit, and replay every outcome before you risk a dollar.")
+          "trader-insider", "trader-journal", "trader-golive", "trader-db", "trader-control"]
+ABOUT = ("15 Claude skills for NSE day trading: scan charts, track news, time every entry and exit, replay every "
+         "outcome, and paper trade first. Longs only, no leverage, your yes on every order.")
 # skills on the way to an order carry the safety block
 ORDER_PATH = ["trader-scanner", "trader-entry", "trader-exit", "trader-timemachine", "trader-budget",
-              "trader-pelosi", "trader-risk", "trader-broker", "trader-alerts"]
+              "trader-insider", "trader-risk", "trader-broker", "trader-alerts"]
 V1_ONLY = ["trader-copycat", "trader-screener", "trader-tax", "trader-rebalance"]
 
 
@@ -33,14 +34,14 @@ def every_text_file():
 
 
 class Repo(unittest.TestCase):
-    def test_eleven_skill_folders_at_the_root(self):
+    def test_skill_folders_at_the_root(self):
         found = sorted(d for d in os.listdir(ROOT)
                        if os.path.isfile(os.path.join(ROOT, d, "SKILL.md")))
         self.assertEqual(found, sorted(SKILLS))
 
     def test_root_matches_the_reel(self):
-        root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git") and d != "__pycache__")
-        self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "PLAN.md", "README.md", "VERIFY.md", "tests"] + SKILLS))
+        root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git") and d not in ("__pycache__", "dist"))
+        self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "PLAN.md", "README.md", "VERIFY.md", "docs", "tests"] + SKILLS))
 
     def test_frontmatter_name_and_description(self):
         for s in SKILLS:
@@ -60,22 +61,22 @@ class Repo(unittest.TestCase):
     def test_plugin_manifest_points_at_the_root_skills(self):
         with open(os.path.join(ROOT, ".claude-plugin", "plugin.json")) as fh:
             plugin = json.load(fh)
-        self.assertEqual(plugin["name"], "day-trader-skill")
+        self.assertEqual(plugin["name"], "india-day-trader-skill")
         self.assertEqual(plugin["skills"], "./")
         self.assertEqual(plugin["description"], ABOUT)
         with open(os.path.join(ROOT, ".claude-plugin", "marketplace.json")) as fh:
             market = json.load(fh)
-        self.assertEqual(market["name"], "day-trader-skill")
-        self.assertEqual(market["plugins"][0]["name"], "day-trader-skill")
+        self.assertEqual(market["name"], "india-day-trader-skill")
+        self.assertEqual(market["plugins"][0]["name"], "india-day-trader-skill")
 
     def test_readme_carries_the_reel_copy(self):
         with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as fh:
             readme = " ".join(fh.read().split())
-        self.assertTrue(readme.startswith("# The Day Trader skill"))
+        self.assertTrue(readme.startswith("# India Day Trader skill"))
         for line in (ABOUT,
-                     "https://github.com/Jakeschincariol/day-trader-skill install skill",
-                     "/plugin marketplace add Jakeschincariol/day-trader-skill",
-                     "/plugin install day-trader-skill@day-trader-skill",
+                     "/plugin marketplace add imdesai00/trading-skill",
+                     "/plugin install india-day-trader-skill@india-day-trader-skill",
+                     "Jake Schincariol",
                      "## Fine print"):
             self.assertIn(line, readme)
         for s in SKILLS:
@@ -200,6 +201,52 @@ class Secrets(unittest.TestCase):
         for path in every_text_file():
             with open(path, encoding="utf-8", errors="replace") as fh:
                 self.assertIsNone(pat.search(fh.read()), os.path.relpath(path, ROOT))
+
+
+class Packaging(unittest.TestCase):
+    def run_each_script_alone(self, pkg, d):
+        """Unzip every skill by itself and run each of its scripts with -h in isolated mode: a missing copy of
+        db.py, guards.py or charges.py shows up here."""
+        import subprocess
+        import zipfile
+        for name in pkg.CONVERTED:
+            out = os.path.join(d, "unzipped", name)
+            os.makedirs(out)
+            with zipfile.ZipFile(os.path.join(d, name + ".zip")) as zf:
+                zf.extractall(out)
+            folder = os.path.join(out, name)
+            for f in sorted(os.listdir(folder)):
+                if f.endswith(".py"):
+                    r = subprocess.run([sys.executable, "-I", os.path.join(folder, f), "-h"], cwd=out,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+                    self.assertEqual(r.returncode, 0, "%s/%s: %s" % (name, f, r.stderr[-300:]))
+
+    def test_every_converted_skill_packages_in_the_layout_claude_wants(self):
+        import importlib.util
+        import tempfile
+        import shutil
+        import zipfile
+        spec = importlib.util.spec_from_file_location("package", os.path.join(ROOT, "tests", "package.py"))
+        pkg = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pkg)
+        d = tempfile.mkdtemp()
+        try:
+            for name in pkg.CONVERTED:
+                self.assertEqual(pkg.check_skill(name), [], name)
+                z = pkg.build(name, d)
+                with zipfile.ZipFile(z) as zf:
+                    names = zf.namelist()
+                self.assertIn(name + "/SKILL.md", names)
+                self.assertTrue(all(n.startswith(name + "/") for n in names), name)
+                self.assertFalse(any("__pycache__" in n or n.endswith(".pyc") for n in names), name)
+            self.run_each_script_alone(pkg, d)
+            a, b = pkg.build("trader-risk", d), os.path.join(d, "again")
+            with open(a, "rb") as fh:
+                first = fh.read()
+            with open(pkg.build("trader-risk", b), "rb") as fh:
+                self.assertEqual(first, fh.read())   # repeatable
+        finally:
+            shutil.rmtree(d)
 
 
 if __name__ == "__main__":

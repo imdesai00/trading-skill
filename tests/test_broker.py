@@ -102,23 +102,23 @@ class Flow(unittest.TestCase):
 
     def test_a_blocked_order_cannot_be_approved(self):
         self.risk_check("2026-10-30 09:20")
-        code, _, err = run(["approve", "--index", "1", "--reply", "yes"] + self.common())
+        code, _, err = run(["approve", "--index", "1", "--reply", "yes", "--why", "test: orb with clear news"] + self.common())
         self.assertEqual(code, 1)
         self.assertIn("BLOCKED by trader-risk", err)
 
     def test_approve_once_then_done(self):
         self.risk_check()
-        code, out, _ = run(["approve", "--index", "1", "--reply", "sure"] + self.common())
+        code, out, _ = run(["approve", "--index", "1", "--reply", "sure", "--why", "test"] + self.common())
         self.assertEqual(code, 1)
         self.assertIn("Not recorded", out)
-        code, out, _ = run(["approve", "--index", "1", "--reply", "yes 45 SYNTHA"] + self.common())
+        code, out, _ = run(["approve", "--index", "1", "--reply", "yes 45 SYNTHA", "--why", "test"] + self.common())
         self.assertEqual(code, 0)
         self.assertIn("Paper mode: no broker is contacted", out)
         with open(self.state) as fh:
             rec = json.load(fh)["orders"][-1]
         self.assertEqual((rec["status"], rec["reply"], rec["mode"], rec["kind"]),
                          ("approved", "yes 45 SYNTHA", "paper", "entry"))
-        code, _, err = run(["approve", "--index", "1", "--reply", "yes"] + self.common())
+        code, _, err = run(["approve", "--index", "1", "--reply", "yes", "--why", "test: orb with clear news"] + self.common())
         self.assertEqual(code, 1)
         self.assertIn("APPROVED by you", err)
 
@@ -131,7 +131,7 @@ class Flow(unittest.TestCase):
         code, out, _ = run(["show"] + self.common())
         self.assertIn("LIVE ACCOUNT, REAL MONEY", out)
         self.assertIn("NOT READY: the risk check ran in paper mode and this is live mode", out)
-        code, _, err = run(["approve", "--index", "1", "--reply", "yes"] + self.common())
+        code, _, err = run(["approve", "--index", "1", "--reply", "yes", "--why", "test: orb with clear news"] + self.common())
         self.assertEqual(code, 1)
         self.assertIn("not ready", err)
 

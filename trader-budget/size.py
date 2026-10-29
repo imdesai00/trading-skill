@@ -50,6 +50,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import charges as chg  # noqa: E402  (same folder: one calculator for the pack)
+import db  # noqa: E402  (a copy of trader-db/db.py; a test keeps the copies identical)
+import guards  # noqa: E402  (shared guard rules; trader-risk, -scanner and -control carry identical copies)
 
 # Your limits (the request of 2026-10-29). trader/config.json overrides them; the tools never write them.
 DEFAULTS = {
@@ -84,11 +86,24 @@ DEFAULTS = {
     "min_price_inr": 50,
     "min_avg_volume": 500000,
     "blocked": [],
+    "limits_pct": dict(guards.DEFAULT_PCT),
+    "live_start_risk_pct": 50,
+    "live_start_weeks": 2,
+    "vix_half": 20,
+    "vix_stop": 25,
+    "gap_half_pct": 1.0,
+    "circuit_margin_pct": 2.0,
+    "max_data_age_min": 3,
+    "losing_streak_stop": 2,
+    "cooldown_min": 15,
+    "protection_data_required": None,
+    "event_days": {},
 }
 EPS = 1e-9
 FRESH_MINUTES = 15
 SETUP_WORDS = {"orb": "opening-range breakout", "level": "close above a level"}
-NEUTRAL_FIELDS = ("symbol", "exchange", "side", "qty", "product", "entry_type", "limit_price", "stop", "target")
+NEUTRAL_FIELDS = ("symbol", "exchange", "side", "qty", "product", "entry_type", "limit_price", "stop", "target",
+                  "action", "order_ref")
 
 
 class SizeError(Exception):
@@ -327,15 +342,18 @@ def shares_for_loss(cap, entry, stop, slip_pct, rates):
     return n
 
 
-def size_trade(plan, cfg, limit=None, price=None, cash=None, today=None):
+def size_trade(plan, cfg, limit=None, price=None, cash=None, today=None, prot=None, live_trades=None):
     """Pure function: one plan + your rules -> the sizing (a dict). qty may be 0.
 
     limit  the limit price for a limit order (None = market)
     price  a FRESH latest price; a market order is sized at the higher of it and the plan's entry
     cash   the paper (or live) cash balance, if known; else capital_inr
-    today  India date (YYYY-MM-DD); a plan for another day is refused"""
+    today  India date (YYYY-MM-DD); a plan for another day is refused
+    prot   protection data from guards.load_protection (None = those rules are off)
+    live_trades  the live ledger's trades, for the half-risk start of live trading"""
     c = dict(DEFAULTS)
     c.update(cfg or {})
+    c, limit_notes = guards.effective_limits(c)
     rates = chg.rates_from(c)
     if not isinstance(plan, dict):
         raise SizeError("the plan is not a JSON object")
@@ -380,8 +398,16 @@ def size_trade(plan, cfg, limit=None, price=None, cash=None, today=None):
     available = max(r2(have - buffer_inr), 0.0)
 
     limits = []
+    factor, half_reasons, stop_reasons = 1.0, [], []
+    blocks = []
+    if prot is not None:
+        factor, half_reasons, stop_reasons = guards.size_factor(sym, today or str(plan.get("date")), c, prot,
+                                                                str(c.get("mode") or "paper"), live_trades)
+        blocks = stop_reasons + guards.symbol_blocks(sym, ref, None, prot, today or str(plan.get("date")), c)
     max_loss = _f(c.get("max_loss_per_trade_inr"))
+    base_max_loss = max_loss
     if max_loss:
+        max_loss = r2(max_loss * factor)
         limits.append({"name": "max loss", "inr": max_loss,
                        "shares": shares_for_loss(max_loss, ref, stop, slip, rates),
                        "how": "%s at the stop, %scharges included" % (inr(max_loss), "slippage and " if slip else "")})
@@ -407,7 +433,9 @@ def size_trade(plan, cfg, limit=None, price=None, cash=None, today=None):
     rr_net = r2(gain / loss) if qty and loss > 0 else None
     charge_share = r2(100.0 * plain_c / gross_target) if qty and gross_target > 0 else None
     refusal = None
-    if qty == 0:
+    if blocks:
+        refusal = "; ".join(blocks) + ". No order."
+    elif qty == 0:
         if bound == "max loss":
             one, _ = loss_at_stop(1, ref, stop, slip, rates)
             refusal = ("one share loses %s at the stop (entry %.2f minus stop %.2f, plus slippage and charges), more "
@@ -436,7 +464,8 @@ def size_trade(plan, cfg, limit=None, price=None, cash=None, today=None):
         "charges_at_target": gain_c["total"], "gross_at_target": gross_target, "charges_pct_of_target": charge_share,
         "slippage_pct": slip, "max_loss_per_trade_inr": max_loss, "flat_by": plan.get("flat_by") or c.get("flat_by"),
         "order_type": "limit" if limit is not None else "market", "refusal": refusal,
-        "charges_checked": rates.get("checked"),
+        "charges_checked": rates.get("checked"), "half_size": {"factor": factor, "reasons": half_reasons},
+        "normal_max_loss_inr": base_max_loss, "config_notes": limit_notes,
     }
 
 
@@ -509,6 +538,12 @@ def plan_report(s, order, notes=()):
                     s["entry"], {"plan": "the plan's entry", "price": "the latest price, above the plan",
                                  "limit": "your limit"}[s["entry_from"]], s["stop"], s["target"],
                     s["risk_per_share"]))
+    for n in s.get("config_notes", []):
+        lines.append("Note: " + n)
+    if s.get("half_size", {}).get("factor", 1.0) < 1.0:
+        lines.append("HALF SIZE today (x%g): %s. Your max loss per trade is %s, not %s." % (
+            s["half_size"]["factor"], "; ".join(s["half_size"]["reasons"]), inr(s["max_loss_per_trade_inr"]),
+            inr(s["normal_max_loss_inr"])))
     lines.append("The limits (whole shares, the smallest wins):")
     for l in s["limits"]:
         lines.append("  %-13s %4d shares   %s%s" % (l["name"], l["shares"], l["how"], "   <- decides it" if l["binds"]
@@ -570,6 +605,8 @@ def cmd_init(a):
     if d:
         os.makedirs(d, exist_ok=True)
     doc = dict(DEFAULTS)
+    doc["limits_pct"] = dict(guards.DEFAULT_PCT)
+    doc.update(guards.derive_inr(doc["capital_inr"], doc["limits_pct"]))
     doc["charges"] = dict(chg.DEFAULT_RATES)
     doc["notion"] = {"parent_page_id": None, "page_id": None, "databases": {}}
     with open(a.config, "w", encoding="utf-8") as fh:
@@ -579,7 +616,14 @@ def cmd_init(a):
           "capital, mode paper." % (a.config, inr(doc["capital_inr"]), inr(doc["max_loss_per_trade_inr"]),
                                     inr(doc["max_daily_loss_inr"]), inr(doc["max_weekly_loss_inr"]),
                                     inr(doc["max_drawdown_pause_inr"])))
-    print("Only you change these. The tools never do.")
+    dbp = db.default_path(a.config)
+    if not db.exists(dbp):
+        db.init(dbp)
+        db.set_account(dbp, "paper", capital=doc["capital_inr"], balance=doc["capital_inr"], baseline=doc["capital_inr"])
+        db.log_config(dbp, doc, "initial", "written by size.py init")
+        print("Created the database %s (db.py check, db.py backup, db.py export are in /trader-db)." % dbp)
+    print("The limits are stored as percent of capital (limits_pct); the rupee values follow from them.")
+    print("Only you change these (or /trader-control, with your confirmation). The other tools never do.")
     return 0
 
 
@@ -603,8 +647,24 @@ def run_plan(a, cfg):
         if limit is None or limit <= 0:
             raise SizeError("--limit wants a price, like --limit 1416.00")
     cash = a.cash if a.cash is not None else paper_cash(a.paper)
-    s = size_trade(plan, cfg, limit, price, cash, today)
+    state_dir = os.path.join(os.path.dirname(os.path.abspath(a.config)), "state")
+    prot = guards.load_protection(state_dir)
+    live_trades = None
+    if str(cfg.get("mode") or "paper") == "live":
+        live = read_json(os.path.join(state_dir, "live.json"), "live ledger") if os.path.exists(
+            os.path.join(state_dir, "live.json")) else None
+        live_trades = (live or {}).get("trades", [])
+    gaps = guards.data_gaps(prot, today)
+    if gaps:
+        notes.append("protection data incomplete, so these checks did not run here (trader-risk reports them too): "
+                     + "; ".join(gaps))
+    s = size_trade(plan, cfg, limit, price, cash, today, prot, live_trades)
     order = order_from(s, cfg)
+    if not a.no_state:       # for the paper broker's `skip --from-plan`, even when the plan was refused
+        os.makedirs(os.path.dirname(a.sizing) or ".", exist_ok=True)
+        with open(a.sizing, "w", encoding="utf-8") as fh:
+            json.dump(s, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
     if a.json:
         print(json.dumps({"sizing": s, "order": order, "notes": notes}, indent=2, ensure_ascii=False))
     else:
@@ -632,6 +692,8 @@ def main(argv=None):
     ap.add_argument("--limit", nargs="?", const="plan", help="a limit order (at the plan's entry, or this price)")
     ap.add_argument("--now", help='pretend it is this India time, e.g. "2026-10-30 09:50"')
     ap.add_argument("--write", nargs="?", const="trader/orders.json", metavar="PATH")
+    ap.add_argument("--sizing", default="trader/state/sizing.json", help="where the last sizing is saved")
+    ap.add_argument("--no-state", action="store_true", help="do not save the last sizing")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     try:

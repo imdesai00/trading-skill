@@ -83,11 +83,19 @@ after the checks in VERIFY.md. Nothing in the skills has been changed yet.
    NSE calendar with CAS, tick sizes, ₹ formatting, your limits. **(done)** Also
    moved in from later phases because the tests needed them: the charges
    calculator and trader-broker's ticket.py (the yes gate) on the new order format.
-3. Paper broker, charges calculator, end-of-day reconcile, skipped signals.
-4. Notion setup, outbox sync, rebuild, daily summary, weekly report.
-5. Kite adapter (disabled, mock-tested) + golive.py check / steps.
-6. News (Yahoo .NS + NSE RSS if reachable), analyst (pasted results), insider (NSE PIT RSS).
-7. README for India, worked example on real NSE data, full test run, summary.
+3. Paper broker, charges calculator, end-of-day reconcile, skipped signals. **(done;
+   slippage in limits and SL-M confirmed 2026-10-29)**
+4. Notion setup, outbox sync, rebuild, daily summary, weekly report. **(done)**
+5. Kite adapter (disabled, mock-tested) + golive.py check / steps. **(done)**
+6. News (Yahoo .NS + NSE RSS if reachable + Moneycontrol RSS, added on your request
+   of 2026-10-29), analyst (pasted results), insider (NSE PIT RSS). Moneycontrol's
+   feeds are market-wide, so headlines are matched to your stocks by company name
+   and tagged with the source; each feed can be switched off in the config. Groww
+   is left out: it has no public news feed, only a web page that would have to be
+   scraped (VERIFY.md section 10). **(done; trader-pelosi replaced by trader-insider,
+   facts.py by results.py; VERIFY.md section 12)**
+7. README for India, worked example, full test run, summary. **(done. The worked example uses
+   SYNTHETIC data because NSE, Yahoo and Zerodha were unreachable; the README says so.)**
 
 ## Changes made in Phase 2 (say no to any of them)
 
@@ -106,7 +114,7 @@ after the checks in VERIFY.md. Nothing in the skills has been changed yet.
   saving, Alpaca bracket orders, PDT, options and crypto symbols, weights mode).
   The upstream tests of logic that still exists (verdict thresholds, seeds,
   stale data, a wick vs a close, a dozing computer, network retries) were ported.
-  News, analyst and Pelosi tests are untouched until Phase 6.
+  News, analyst and Pelosi tests were rewritten in Phase 6 (see below).
 
 ## What I needed from you before Phase 2 (answered)
 
@@ -147,3 +155,11 @@ after the checks in VERIFY.md. Nothing in the skills has been changed yet.
 - **Going live is heavier than "connect Kite".** If the hosted Kite MCP server
   cannot place orders (likely), you need a self-hosted server, a paid Kite
   Connect API key and possibly a registered static IP. Budget for that now.
+
+## Final test count
+
+See the last commit message and the README. Phase 6 replaced the US news, SEC-facts and Pelosi tests with tests of the NSE news monitor, the results reader and the insider tracker.
+
+## Second pass (2026-10-29): the full specification
+
+You sent a fuller specification (SQLite as the source of truth, percent limits, capital and kill-switch control, India protections, Kite live checks and reconcile, nine Notion databases, docs). It was audited against the build: see docs/AUDIT.md. The gaps were filled in this order: database (trader-db), controls (trader-control), protections (guards.py in risk, budget and scanner), Notion extension, live additions, docs.

@@ -1,0 +1,1 @@
+{"chart": {"result": [{"meta": {"symbol": "SYNTHA.NS", "currency": "INR", "regularMarketPrice": 105.0, "regularMarketTime": 1793328900, "previousClose": 100.0, "synthetic": true}, "timestamp": [1793328600], "indicators": {"quote": [{"open": [105.0], "high": [105.0], "low": [105.0], "close": [105.0], "volume": [100]}]}}], "error": null}}

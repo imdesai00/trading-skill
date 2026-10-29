@@ -9,7 +9,9 @@ from _load import load, ROOT, ist
 
 SCRIPTS = [("trader-alerts", "alerts"), ("trader-scanner", "scan"), ("trader-entry", "entry"),
            ("trader-exit", "exit"), ("trader-timemachine", "timemachine"), ("trader-budget", "size"),
-           ("trader-risk", "check"), ("trader-broker", "ticket")]
+           ("trader-risk", "check"), ("trader-broker", "ticket"), ("trader-broker", "paper"),
+           ("trader-journal", "journal"), ("trader-news", "news"), ("trader-insider", "insider"),
+           ("trader-control", "control")]
 START = "# ---------------------------------------------------------------- NSE clock (same block in every script)"
 END = "# ---------------------------------------------------------------- end NSE clock"
 alerts = load("trader-alerts", "alerts")
@@ -146,6 +148,38 @@ class Charges(unittest.TestCase):
         self.assertIn("total", out.getvalue())
         self.assertIn("estimate", out.getvalue())
         self.assertRegex(out.getvalue(), re.compile(r"checked 2026-10-29"))
+
+
+class StandaloneSkills(unittest.TestCase):
+    """Claude uploads each skill as its own ZIP, so no script may reach into a sibling folder."""
+
+    def test_the_charges_copies_are_identical(self):
+        def body(folder):
+            with open(os.path.join(ROOT, folder, "charges.py"), encoding="utf-8") as fh:
+                return fh.read()
+        for folder in ("trader-risk", "trader-broker"):
+            self.assertEqual(body(folder), body("trader-budget"), folder)
+
+    def test_the_db_copies_are_identical(self):
+        def body(folder):
+            with open(os.path.join(ROOT, folder, "db.py"), encoding="utf-8") as fh:
+                return fh.read()
+        for folder in ("trader-broker", "trader-risk", "trader-journal", "trader-golive", "trader-budget",
+                       "trader-control"):
+            self.assertEqual(body(folder), body("trader-db"), folder)
+
+    def test_the_guards_copies_are_identical(self):
+        def body(folder):
+            with open(os.path.join(ROOT, folder, "guards.py"), encoding="utf-8") as fh:
+                return fh.read()
+        for folder in ("trader-budget", "trader-scanner", "trader-control"):
+            self.assertEqual(body(folder), body("trader-risk"), folder)
+
+    def test_no_script_imports_a_sibling_skill(self):
+        for folder, name in SCRIPTS + [("trader-budget", "charges"), ("trader-db", "db"), ("trader-risk", "guards")]:
+            with open(os.path.join(ROOT, folder, name + ".py"), encoding="utf-8") as fh:
+                text = fh.read()
+            self.assertNotRegex(text, r'os\.path\.dirname\(HERE\)|"trader-[a-z]+"\)\)', "%s/%s.py" % (folder, name))
 
 
 if __name__ == "__main__":

@@ -15,3 +15,11 @@ claude_desktop_config.json
 
 __pycache__/
 *.pyc
+
+# built skill ZIPs (python3 tests/package.py)
+dist/
+
+# the local database and its relatives (the whole trader/ folder is ignored above; these catch strays)
+*.db
+*.db.before-restore
+STOP

@@ -105,6 +105,10 @@ class ScanError(Exception):
 
 ClockError = ScanError
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import guards  # noqa: E402  (shared guard rules; trader-risk, -budget and -control carry identical copies)
+
 # ---------------------------------------------------------------- NSE clock (same block in every script)
 # tests/test_repo.py checks that every copy of this block is identical.
 # India Standard Time is UTC+05:30 all year (no daylight saving, no tz files).
@@ -778,6 +782,143 @@ def _read_source(path, url, what):
 
 # ---------------------------------------------------------------- commands
 
+def state_dir_for(a):
+    return os.path.join(os.path.dirname(a.out) or ".", "state")
+
+
+def protect_filter(symbols, a, now_utc):
+    """Drop ASM / GSM stocks and stocks that are not MIS-eligible, using today's files (see `protect`).
+    -> (kept, {"asm": n, "gsm": n, "not_mis": n}, [notes about lists that could not be used])."""
+    today = to_ist(now_utc).date().isoformat()
+    prot = guards.load_protection(state_dir_for(a))
+    drop = {"asm": 0, "gsm": 0, "not_mis": 0}
+    notes = []
+    keep = list(symbols)
+    sv = prot.get("surveillance.json")
+    if isinstance(sv, dict) and str(sv.get("date")) == today:
+        asm, gsm = {x.upper() for x in sv.get("asm", [])}, {x.upper() for x in sv.get("gsm", [])}
+        drop["asm"] = sum(1 for x in keep if x in asm)
+        drop["gsm"] = sum(1 for x in keep if x in gsm and x not in asm)
+        keep = [x for x in keep if x not in asm and x not in gsm]
+    else:
+        notes.append("ASM/GSM lists not loaded for today: stocks under surveillance were NOT removed (scan.py protect)")
+    mis = prot.get("mis.json")
+    if isinstance(mis, dict) and str(mis.get("date")) == today:
+        ok = {x.upper() for x in mis.get("symbols", [])}
+        drop["not_mis"] = sum(1 for x in keep if x not in ok)
+        keep = [x for x in keep if x in ok]
+    else:
+        notes.append("MIS-eligible list not loaded for today: stocks the broker may refuse for intraday were NOT removed")
+    return keep, drop, notes
+
+
+def _symbol_cells(text, header_hints=("symbol",)):
+    rows = list(csv.reader(io.StringIO(text.lstrip("\ufeff"))))
+    rows = [r for r in rows if any(c.strip() for c in r)]
+    if not rows:
+        raise ScanError("the file is empty")
+    head = [c.strip().lower() for c in rows[0]]
+    idx = next((i for i, h in enumerate(head) if any(k in h for k in header_hints)), None)
+    if idx is None:
+        idx, body = 0, rows        # no header: the first column is the symbol
+    else:
+        body = rows[1:]
+    return head, idx, body
+
+
+def read_symbol_list(path):
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        head, idx, body = _symbol_cells(fh.read())
+    return sorted({r[idx].strip().upper() for r in body if len(r) > idx and r[idx].strip()
+                   and re.match(r"^[A-Za-z0-9&\-]{1,20}$", r[idx].strip())})
+
+
+def read_bands(path):
+    """NSE's price-band CSV -> {SYMBOL: percent or None}. The band column is found by name."""
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        head, idx, body = _symbol_cells(fh.read())
+    bi = next((i for i, h in enumerate(head) if "band" in h), None)
+    if bi is None:
+        raise ScanError("no price-band column in that file (columns: %s)" % ", ".join(head))
+    out = {}
+    for r in body:
+        if len(r) <= max(idx, bi) or not r[idx].strip():
+            continue
+        v = r[bi].strip().lower().replace("%", "")
+        try:
+            out[r[idx].strip().upper()] = float(v)
+        except ValueError:
+            out[r[idx].strip().upper()] = None          # "No Band" and the like
+    return out
+
+
+def cmd_protect(a):
+    """Turn the lists you exported into trader/state/*.json for today. Nothing is fetched."""
+    now = parse_now(a.now)
+    today = a.date or to_ist(now).date().isoformat()
+    sdir = state_dir_for(a)
+    done = []
+    if a.asm or a.gsm:
+        path = os.path.join(sdir, "surveillance.json")
+        old = guards.read_state(sdir, "surveillance.json") or {}
+        doc = old if str(old.get("date")) == today else {"asm": [], "gsm": []}
+        doc["date"] = today
+        if a.asm:
+            doc["asm"] = read_symbol_list(a.asm)
+        if a.gsm:
+            doc["gsm"] = read_symbol_list(a.gsm)
+        write_json(path, doc)
+        done.append("surveillance.json: %d ASM, %d GSM" % (len(doc["asm"]), len(doc["gsm"])))
+    if a.mis:
+        syms = read_symbol_list(a.mis)
+        write_json(os.path.join(sdir, "mis.json"), {"date": today, "symbols": syms})
+        done.append("mis.json: %d MIS-eligible symbols" % len(syms))
+    if a.bands:
+        b = read_bands(a.bands)
+        write_json(os.path.join(sdir, "bands.json"), {"date": today, "bands": b})
+        done.append("bands.json: %d symbols (%d with a band)" % (len(b), sum(1 for v in b.values() if v)))
+    if not done:
+        raise ScanError("give at least one of --asm, --gsm, --mis, --bands (files you exported; VERIFY.md section 14)")
+    print("Saved for %s in %s:" % (today, sdir))
+    for d in done:
+        print("  " + d)
+    print("trader-risk and trader-budget read these. They go stale at midnight: repeat each trading morning.")
+    return 0
+
+
+def cmd_market(a):
+    """India VIX and the NIFTY opening gap -> trader/state/market.json (typed in, or fetched from Yahoo)."""
+    now = parse_now(a.now)
+    today = to_ist(now).date().isoformat()
+    vix, gap, src = a.vix, a.gap, "typed in by you"
+    if a.fetch:
+        src = "Yahoo ^INDIAVIX and ^NSEI (unofficial)"
+        def get(sym, rng, itv):
+            if a.offline:
+                path = os.path.join(a.offline, sym.replace("^", "") + ".json")
+                if not os.path.isfile(path):
+                    raise ScanError("offline: no file %s" % path)
+                with open(path, encoding="utf-8") as fh:
+                    return parse_chart(fh.read(), sym)
+            return parse_chart(yahoo_get("/v8/finance/chart/%s?range=%s&interval=%s" % (urllib.parse.quote(sym), rng, itv)), sym)
+        try:
+            v = get("^INDIAVIX", "1d", "5m")
+            closes = [x for x in v["c"] if x is not None]
+            vix = round(closes[-1], 2) if closes else None
+            n = get("^NSEI", "1d", "5m")
+            prev = n["meta"].get("chartPreviousClose") or n["meta"].get("previousClose")
+            opens = [x for x in (n["o"] or []) if x is not None]
+            gap = round((opens[0] / prev - 1) * 100.0, 2) if opens and prev else None
+        except (ScanError, IndexError, KeyError) as e:
+            raise ScanError("could not get the market data (%s). Type it in: scan.py market --vix 14.2 --gap 0.3" % e)
+    if vix is None and gap is None:
+        raise ScanError("give --vix and/or --gap, or --fetch")
+    write_json(os.path.join(state_dir_for(a), "market.json"), {"date": today, "vix": vix, "nifty_gap_pct": gap, "source": src})
+    print("India VIX %s, NIFTY opening gap %s (%s). Saved for %s." % (
+        "n/a" if vix is None else vix, "n/a" if gap is None else "%+.2f%%" % gap, src, today))
+    return 0
+
+
 def cmd_universe(a):
     eq_file = a.equity_file or (os.path.join(a.offline, "EQUITY_L.csv") if a.offline else None)
     eq_text = _read_source(eq_file, EQUITY_URL, "NSE equity list")
@@ -816,6 +957,7 @@ def cmd_daily(a):
         data, failed = load_offline(a.offline)
         offline_syms = sorted(set(data) | set(failed))
     symbols = read_symbols(a, offline_syms)
+    symbols, dropped, pnotes = protect_filter(symbols, a, now)
     if not a.offline:
         progress(a, "Fetching 3 months of daily bars for %d symbols (one request each)..." % len(symbols))
         data, failed = fetch_charts(symbols, "3mo", "1d", a.pause, a)
@@ -824,13 +966,15 @@ def cmd_daily(a):
     doc = {"created_by": "trader-scanner", "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "daily",
            "as_of": ("%s close" % last_date.isoformat()) if last_date else None, "universe": len(symbols),
            "scanned": counts["scanned"], "failed": nfailed, "source": "yahoo",
-           "filters": {"min_price": a.min_price, "min_avg_volume": a.min_avg_volume}, "note": NOTE, "hits": hits}
+           "filters": {"min_price": a.min_price, "min_avg_volume": a.min_avg_volume}, "note": NOTE, "hits": hits,
+           "excluded": dropped, "protection_notes": pnotes}
     if a.offline:
         doc["offline"] = os.path.basename(a.offline.rstrip("/"))
         if is_synthetic(data):
             doc["synthetic"] = True
     if not a.no_write:
         write_json(a.out, doc)
+        log_scan(a, doc, now)
     if a.json:
         print(json.dumps(dict(doc, counts=counts, seconds=round(time.time() - t0, 1)), indent=2,
                          ensure_ascii=False))
@@ -847,6 +991,11 @@ def cmd_daily(a):
                                       inr(a.min_price), _grp(a.min_avg_volume),
                                       (", %d had under %d days" % (counts["short"], MIN_DAILY_BARS))
                                       if counts["short"] else "", counts["scanned"]))
+    for n_ in pnotes:
+        print("NOTE: " + n_)
+    if sum(dropped.values()):
+        print("Removed before scanning: %d ASM, %d GSM, %d not MIS-eligible." % (
+            dropped["asm"], dropped["gsm"], dropped["not_mis"]))
     if hits:
         per = [(k, sum(1 for h in hits if k in h["setups"])) for k, _ in SETUPS]
         print("%d chart%s matched a setup: %s." % (len(hits), "" if len(hits) == 1 else "s",
@@ -885,6 +1034,7 @@ def cmd_orb(a):
                     raise ScanError('offline replay: give --at HH:MM or --now "YYYY-MM-DD HH:MM"')
     day, cutoff = orb_window(now, at, a.or_minutes, until, explicit_day)
     symbols = read_symbols(a, offline_syms)
+    symbols, dropped, pnotes = protect_filter(symbols, a, now)
     if not a.offline:
         today = to_ist(parse_now(None)).date()
         if (today - day).days > 4:
@@ -897,17 +1047,23 @@ def cmd_orb(a):
            "as_of": "%s %s IST" % (day.isoformat(), cutoff.strftime("%H:%M")), "universe": len(symbols),
            "scanned": counts["scanned"], "failed": nfailed, "source": "yahoo", "or_minutes": a.or_minutes,
            "interval": "%dm" % BAR_MIN, "filters": {"min_price": a.min_price, "min_avg_volume": a.min_avg_volume},
-           "note": NOTE, "hits": hits}
+           "note": NOTE, "hits": hits, "excluded": dropped, "protection_notes": pnotes}
     if a.offline:
         doc["offline"] = os.path.basename(a.offline.rstrip("/"))
         if is_synthetic(data):
             doc["synthetic"] = True
     if not a.no_write:
         write_json(a.out, doc)
+        log_scan(a, doc, now)
     if a.json:
         print(json.dumps(dict(doc, counts=counts, seconds=round(time.time() - t0, 1)), indent=2,
                          ensure_ascii=False))
         return 0 if hits else 1
+    for n_ in pnotes:
+        print("NOTE: " + n_)
+    if sum(dropped.values()):
+        print("Removed before scanning: %d ASM, %d GSM, %d not MIS-eligible." % (
+            dropped["asm"], dropped["gsm"], dropped["not_mis"]))
     if doc.get("synthetic"):
         print("SYNTHETIC test data, not market prices.")
     print("Opening-range breakout scan, %s %s India time: %d-minute range (09:15 to %s), 5-minute bars, Yahoo."
@@ -929,6 +1085,25 @@ def cmd_orb(a):
         print("Wrote %s (mode orb, %d hit%s)." % (a.out, len(hits), "" if len(hits) == 1 else "s"))
     print(NOTE + " Next: pick one chart, then /trader-news SYMBOL and /trader-entry SYMBOL.")
     return 0 if hits else 1
+
+
+def log_scan(a, doc, now):
+    """Record the scan in trader/trader.db (the scans table) when the database exists. A failure is shown."""
+    path = os.path.join(os.path.dirname(a.out) or ".", "trader.db")
+    if not os.path.isfile(path):
+        return
+    try:
+        import sqlite3
+        conn = sqlite3.connect(path, timeout=30)
+        try:
+            conn.execute("INSERT INTO scans (at, kind, universe, hits, doc) VALUES (?,?,?,?,?)",
+                         (now.strftime("%Y-%m-%dT%H:%M:%SZ"), doc["mode"], str(doc.get("universe")),
+                          len(doc.get("hits", [])), json.dumps(doc, ensure_ascii=False)))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print("WARNING: could not log the scan to %s: %s" % (path, e), file=sys.stderr)
 
 
 def _p(x):
@@ -967,6 +1142,21 @@ def main(argv=None):
         p.add_argument("--quiet", action="store_true")
         p.add_argument("--json", action="store_true")
 
+    p = sub.add_parser("protect", help="turn exported ASM/GSM/MIS/price-band files into today's protection data")
+    p.add_argument("--asm", metavar="CSV")
+    p.add_argument("--gsm", metavar="CSV")
+    p.add_argument("--mis", metavar="CSV")
+    p.add_argument("--bands", metavar="CSV")
+    p.add_argument("--date", help="YYYY-MM-DD (default: today in India)")
+    p.add_argument("--out", default="trader/watchlist.json", help="sets where trader/state/ is")
+    p.add_argument("--now", help="pretend it is this India time")
+    p = sub.add_parser("market", help="India VIX and the NIFTY opening gap -> trader/state/market.json")
+    p.add_argument("--vix", type=float)
+    p.add_argument("--gap", type=float, help="NIFTY open vs yesterday's close, percent")
+    p.add_argument("--fetch", action="store_true", help="ask Yahoo (^INDIAVIX, ^NSEI) instead of typing it in")
+    p.add_argument("--offline", metavar="DIR")
+    p.add_argument("--out", default="trader/watchlist.json", help="sets where trader/state/ is")
+    p.add_argument("--now", help="pretend it is this India time")
     p = sub.add_parser("daily", help="pre-market setups from daily bars")
     common(p)
     p = sub.add_parser("orb", help="opening-range breakouts so far today")
@@ -980,7 +1170,8 @@ def main(argv=None):
         ap.print_help()
         return 1
     try:
-        return {"universe": cmd_universe, "daily": cmd_daily, "orb": cmd_orb}[a.cmd](a)
+        return {"universe": cmd_universe, "daily": cmd_daily, "orb": cmd_orb, "protect": cmd_protect,
+                "market": cmd_market}[a.cmd](a)
     except ScanError as e:
         print("scan.py: %s" % e, file=sys.stderr)
         return 1

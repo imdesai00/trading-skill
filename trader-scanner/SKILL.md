@@ -25,7 +25,9 @@ is not a prediction. SEBI's own study found most individual intraday traders
 in the cash segment lost money (VERIFY.md section 7); the scanner does not
 change that. It only saves you from flipping through a hundred charts by hand.
 
-`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
+`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives). If your Claude does not
+set that variable, use the path of the folder this SKILL.md is in. Run every command from your working
+folder (the one that holds `trader/`), not from inside the skill folder.
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scan.py" universe                       # NSE EQ list x NIFTY 100 -> trader/universe.txt
@@ -139,6 +141,14 @@ README.md has the worked example on a real NSE stock once real data is captured.
 
 It never places, sizes or checks an order, never says which stock to buy,
 never calls data official, and never promises that a setup works.
+
+## Added (database edition)
+
+- `scan.py protect --asm F --gsm F --mis F --bands F` turns lists you exported into today's protection files.
+  `daily` and `orb` then drop ASM/GSM stocks and stocks that are not MIS-eligible, and say how many. If the lists are not
+  loaded for today, the scan says nothing was removed.
+- `scan.py market --fetch` (or `--vix 14.2 --gap 0.3`) saves India VIX and the NIFTY opening gap for the half-size rules.
+- Each scan is also logged in the database (scans table).
 
 ## Safety
 

@@ -1,0 +1,27 @@
+# Documentation
+
+Start here if you are new. Read the files in this order the first time; later, use them as a reference.
+
+| file | read it when |
+| --- | --- |
+| [GETTING_STARTED.md](GETTING_STARTED.md) | you have just downloaded the pack and want it running in an afternoon |
+| [DAILY_ROUTINE.md](DAILY_ROUTINE.md) | you want to know exactly what to do each trading day, and each Friday |
+| [SKILLS.md](SKILLS.md) | you want to know what each of the 15 skills does and its commands |
+| [SAFETY.md](SAFETY.md) | you want to know what stops a bad trade (and what does not) |
+| [CONFIG.md](CONFIG.md) | you want to change a setting, or understand one |
+| [DATA_FILES.md](DATA_FILES.md) | you need the daily ASM/GSM, MIS, price-band and VIX files |
+| [NOTION.md](NOTION.md) | you are setting up or fixing the Notion journal |
+| [GO_LIVE.md](GO_LIVE.md) | four weeks of paper trading are done and you are thinking about real money |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | you want the code map, the database tables and the data flow |
+| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | something printed an error or looks wrong |
+| [GLOSSARY.md](GLOSSARY.md) | a word is new to you (MIS, SL-M, ASM, R multiple ...) |
+| [AUDIT.md](AUDIT.md) | you want to see this build checked against the specification, and what is still missing |
+
+Two facts to keep in mind everywhere:
+
+1. **Nothing here is financial advice**, and most people who day trade lose money.
+2. **Paper trading is the default and nothing places an order without your typed "yes".** Real money needs you to edit your own config
+   file, connect Zerodha Kite yourself and confirm several settings. No tool in this pack can do that for you.
+
+Also in the repository: [VERIFY.md](../VERIFY.md) lists every outside fact the code depends on, with its source, its date and whether it was
+actually checked. Read it before you trust a feed or a charge rate.

@@ -1,0 +1,101 @@
+import json
+import os
+import re
+import unittest
+
+from _load import ROOT
+
+DOCS = os.path.join(ROOT, "docs")
+FILES = ["README.md", "GETTING_STARTED.md", "DAILY_ROUTINE.md", "SKILLS.md", "SAFETY.md", "CONFIG.md", "DATA_FILES.md",
+         "NOTION.md", "GO_LIVE.md", "ARCHITECTURE.md", "TROUBLESHOOTING.md", "GLOSSARY.md", "AUDIT.md"]
+
+
+def read(*parts):
+    with open(os.path.join(ROOT, *parts), encoding="utf-8") as fh:
+        return fh.read()
+
+
+class Docs(unittest.TestCase):
+    def test_every_doc_exists_and_is_listed_in_the_index(self):
+        index = read("docs", "README.md")
+        for f in FILES:
+            self.assertTrue(os.path.isfile(os.path.join(DOCS, f)), f)
+            if f != "README.md":
+                self.assertIn("(%s)" % f, index, f)
+        extra = sorted(set(os.listdir(DOCS)) - set(FILES))
+        self.assertEqual(extra, [])
+
+    def test_relative_links_resolve(self):
+        for f in FILES + ["../README.md"]:
+            base = os.path.dirname(os.path.join(DOCS, f))
+            for m in re.finditer(r"\]\(([^)#\s]+?)(?:#[^)]*)?\)", read("docs", f)):
+                target = m.group(1)
+                if target.startswith(("http", "mailto")):
+                    continue
+                self.assertTrue(os.path.exists(os.path.normpath(os.path.join(base, target))), "%s -> %s" % (f, target))
+
+    def test_every_skill_is_described(self):
+        text = read("docs", "SKILLS.md")
+        for name in sorted(d for d in os.listdir(ROOT) if os.path.isfile(os.path.join(ROOT, d, "SKILL.md"))):
+            self.assertIn(name, text, name)
+        self.assertIn("The 15 skills", text)
+
+    def test_every_config_key_is_documented(self):
+        text = read("docs", "CONFIG.md")
+        cfg = json.loads(read("trader-budget", "config.example.json"))
+        for key in cfg:
+            self.assertIn("`%s`" % key, text, key)
+        for key in cfg["limits_pct"]:
+            self.assertIn(key, text, key)
+
+    def test_every_table_is_in_the_architecture_page(self):
+        import sqlite3
+        import tempfile
+        import shutil
+        from _load import load
+        db = load("trader-db", "db")
+        d = tempfile.mkdtemp()
+        try:
+            p = os.path.join(d, "x.db")
+            db.init(p)
+            conn = sqlite3.connect(p)
+            names = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            conn.close()
+        finally:
+            shutil.rmtree(d)
+        text = read("docs", "ARCHITECTURE.md")
+        for n in names:
+            self.assertIn("`%s`" % n, text, n)
+
+    def test_every_protection_file_is_in_data_files(self):
+        text = read("docs", "DATA_FILES.md")
+        for f in ("surveillance.json", "mis.json", "bands.json", "market.json", "results_today.json", "events.json"):
+            self.assertIn(f, text, f)
+
+    def test_the_safety_page_states_the_rules(self):
+        text = " ".join(read("docs", "SAFETY.md").split())
+        for want in ("No tool ever changes `mode` or `kite_enabled`", "Your typed \"yes\" for that one order", "Allow once",
+                     "Nothing from a background or scheduled task", "trader/STOP", "0.3%", "Most individual intraday traders lose money",
+                     "TOTP", "including Claude"):
+            self.assertIn(want, text, want)
+
+    def test_the_getting_started_page_has_the_security_reminders(self):
+        text = read("docs", "GETTING_STARTED.md")
+        self.assertIn("TOTP", text)
+        self.assertIn("including Claude", text)
+
+    def test_every_command_line_in_the_docs_names_a_real_script(self):
+        scripts = set()
+        for d in os.listdir(ROOT):
+            if os.path.isfile(os.path.join(ROOT, d, "SKILL.md")):
+                scripts.update(f for f in os.listdir(os.path.join(ROOT, d)) if f.endswith(".py"))
+        for f in FILES:
+            for m in re.finditer(r"\b([a-z_]+\.py)\b", read("docs", f)):
+                name = m.group(1)
+                if name in ("sec_list.py",):
+                    continue
+                self.assertIn(name, scripts | {"package.py", "capture.py"}, "%s mentions %s" % (f, name))
+
+
+if __name__ == "__main__":
+    unittest.main()

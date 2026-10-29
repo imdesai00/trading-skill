@@ -100,7 +100,7 @@ class TheOrder(unittest.TestCase):
     def test_broker_neutral_fields_and_the_kite_payload(self):
         s = sz()
         o = size.order_from(s, {})
-        self.assertEqual({k: o[k] for k in size.NEUTRAL_FIELDS},
+        self.assertEqual({k: o[k] for k in size.NEUTRAL_FIELDS if k in o},
                          {"symbol": "SYNTHA", "exchange": "NSE", "side": "buy", "qty": 45, "product": "MIS",
                           "entry_type": "market", "limit_price": None, "stop": 1408.0, "target": 1440.0})
         k = o["kite"]
