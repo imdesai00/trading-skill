@@ -7,7 +7,7 @@
 Each ZIP holds ONE folder (the skill's own name) with SKILL.md and its scripts at the top, which is the
 layout Claude's skill upload wants. Every skill is standalone: no script reaches into a sibling folder
 (tests/test_clock.py checks that). The ZIP is byte-for-byte repeatable.
-Skills not converted to NSE yet (news, analyst, pelosi) are left out until their phase.
+All thirteen skills are converted.
 """
 
 import os
@@ -16,8 +16,9 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONVERTED = ["trader-scanner", "trader-entry", "trader-exit", "trader-timemachine", "trader-budget",
-             "trader-risk", "trader-broker", "trader-alerts", "trader-journal", "trader-golive"]
+CONVERTED = ["trader-scanner", "trader-news", "trader-entry", "trader-exit", "trader-timemachine", "trader-budget",
+             "trader-risk", "trader-broker", "trader-alerts", "trader-analyst", "trader-insider", "trader-journal",
+             "trader-golive"]
 SKIP = ("__pycache__",)
 
 

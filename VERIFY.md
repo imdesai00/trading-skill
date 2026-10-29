@@ -244,6 +244,28 @@ https://groww.in/trade-api.
 | The paper slippage (0.05 % a side) is counted in the ₹500 max loss and the 1.5 reward:risk (`limits_include_slippage: true`) | trader-budget, trader-risk | a design choice, yours to change; see PLAN.md |
 | Yahoo's spark (batch) endpoint is not used for `.NS`: one chart request per symbol | scanner | avoids an unverified endpoint; NIFTY 100 is about 100 requests |
 
+## 12. Assumptions made while building news, results and insider (Phase 6, 2026-10-29)
+
+None of these could be fetched from the build sandbox. Every fixture for them is SYNTHETIC (symbols SYNTHA to SYNTHG, example.invalid links), so the tests prove the code, not the feeds.
+
+| item | what the code assumes | status |
+| --- | --- | --- |
+| Yahoo headline RSS for `.NS` | `https://feeds.finance.yahoo.com/rss/2.0/headline?s=RELIANCE.NS&region=IN&lang=en-IN` returns standard RSS 2.0 with `item/title/link/guid/pubDate`. The old US feed used `region=US`; `region=IN` is a guess. | UNVERIFIED. If it returns nothing for Indian symbols, trader-news prints a note and the other feeds still run. |
+| NSE announcements RSS | Standard RSS 2.0; the title starts with the symbol, then the company and the subject. The matching also works when it does not. | UNVERIFIED (URL from a third-party list). |
+| Moneycontrol RSS | Section feeds as in section 10, standard RSS 2.0, `pubDate` with a zone. Market-wide: matched by symbol or company name. Personal reading only. | UNVERIFIED. Terms of use not read. |
+| Groww | No public news feed; not read. | Not built. |
+| Name matching | A symbol of 4 or more letters matches as a bare capitalised word; shorter symbols only as `(SYM)`, `NSE: SYM` or the full company name. A first word that starts two of your companies' names, or a common word (Tata, Bank, India ...), is never used alone. A name-only match is shown as POSSIBLE. | Design choice, tested. It will miss some stories (a bare "ITC") and show some false POSSIBLEs. |
+| Results today | Any item for your symbol tagged results or board meeting and dated today (IST) raises RESULTS TODAY. It cannot see a results date that has not been announced yet. | Design choice. Warning only: trader-risk does not read it. |
+| Results table text | Rows labelled revenue from operations / net sales, other income, total income, total expenses, exceptional items, profit before tax, tax, net profit / profit for the period, basic EPS, with the numbers after the label; column order from date headers, else assumed current, previous quarter, year ago. | Written from the usual layout of Indian quarterly results; not tested on a real filing. The report says when it assumed the order. |
+| Insider CSV columns | Found by words in the header (SYMBOL, NAME OF THE PERSON, CATEGORY OF PERSON, NO. OF SECURITIES, VALUE OF SECURITY, TRANSACTION TYPE, MODE OF ACQUISITION, DATE OF ALLOTMENT/ACQUISITION FROM, DATE OF INITIMATION, BROADCAST DATE). The names are from memory of NSE's export, not from a file. | UNVERIFIED. A missing required column stops the import and prints the columns that were there. |
+| Insider RSS | `https://nsearchives.nseindia.com/content/RSS/Insider_Trading.xml` gives notices (title and link), not the numbers. | UNVERIFIED (section 10). |
+| Disclosure deadline | "About two trading days" to disclose, used only to mark a gap as late. | SECONDARY: from the SEBI PIT Regulations as commonly summarised; the regulation text was not read here. |
+| Moneycontrol and Yahoo times | Items with no time zone are taken as India time. | Assumption. |
+
+## 13. What the whole build did NOT test against reality
+
+No real NSE, Yahoo, Moneycontrol, Zerodha or Notion call was made by the tests. Real calls happen first on your machine. The first things to look at: `scan.py universe` (did the CSVs download and parse?), one `entry.py check` on a real symbol after 09:35, `news.py` (which of the three feeds answered?), the first Notion sync (did the database schema create?), and `alerts.py quote RELIANCE` against Kite's price. `tests/capture.py` saves real Yahoo bars so the synthetic fixtures can be replaced.
+
 ## Items to re-check when you connect Kite (RECHECK-AT-KITE)
 
 1. Whether the hosted `mcp.kite.trade` exposes `place_order` / `modify_order` / `cancel_order` (assumed: no).

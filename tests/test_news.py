@@ -1,16 +1,17 @@
-import datetime
 import io
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
-from _load import FIX, load
+from _load import FIX, ROOT, load, write
 
 news = load("trader-news", "news")
-DIR = os.path.join(FIX, "trader-news")
-NOW = "2026-10-14T00:00:00+00:00"
+DIR = os.path.join(FIX, "trader-news")      # SYNTHETIC feeds: the real ones could not be fetched when this was built
+NOW = "2026-10-30 08:30"                    # India time, a trading Friday, before the open
+WATCH = {"SYNTHA": "Synthetic Alpha Limited", "SYNTHB": "Synthetic Beta Limited"}
 
 
 def raw(name):
@@ -18,190 +19,222 @@ def raw(name):
         return fh.read()
 
 
-def run(args):
-    out, err = io.StringIO(), io.StringIO()
-    with redirect_stdout(out), redirect_stderr(err):
-        code = news.main(args)
-    return code, out.getvalue(), err.getvalue()
+class Parsing(unittest.TestCase):
+    def test_rss_items_carry_source_symbol_and_utc_time(self):
+        items = news.parse_rss(raw("yahoo-SYNTHA.xml"), "Yahoo Finance", "SYNTHA")
+        self.assertEqual(len(items), 3)
+        self.assertEqual(items[0]["symbol"], "SYNTHA")
+        self.assertEqual(items[0]["time"].isoformat(), "2026-10-30T02:15:00")      # naive UTC
+        self.assertTrue(items[0]["id"].startswith("Yahoo Finance:"))
 
-
-class Feeds(unittest.TestCase):
-    def test_yahoo_rss(self):
-        items = news.parse_rss(raw("yahoo-AAPL.xml"), "AAPL")
-        self.assertEqual(len(items), 6)
-        first = items[0]
-        self.assertEqual(first["title"], "Apple may have a way to dominate the smart home space")
-        self.assertEqual(first["time"], datetime.datetime(2026, 10, 13, 19, 46, 52,
-                                                          tzinfo=datetime.timezone.utc))
-        self.assertTrue(first["link"].startswith("https://finance.yahoo.com/"))
-        self.assertTrue(first["id"].startswith("rss:"))
-
-    def test_sec_atom_8k(self):
-        items = news.parse_sec_atom(raw("sec-8-K-0000320193.xml"), "AAPL")
-        self.assertEqual([i["form"] for i in items], ["8-K/A", "8-K", "8-K"])
-        earn = items[1]
-        self.assertEqual(earn["items"], ["2.02", "9.01"])
-        self.assertTrue(earn["important"])
-        self.assertEqual(earn["title"], "Apple Inc. filed a 8-K: earnings results")
-        self.assertEqual(earn["id"], "sec:0000320193-26-000018")
-        self.assertIn("000032019326000018", earn["link"])
-        # 16:30:28 New York time is 20:30:28 UTC
-        self.assertEqual(earn["time"].isoformat(), "2026-07-30T20:30:28+00:00")
-        self.assertEqual(items[0]["title"], "Apple Inc. filed a 8-K/A: director or officer change")
-
-    def test_times(self):
-        self.assertEqual(news.parse_time("Tue, 13 Oct 2026 20:02:03 +0000").hour, 20)
-        self.assertEqual(news.parse_time("2026-09-01T16:30:35-04:00").hour, 20)
+    def test_a_time_without_a_zone_is_india_time(self):
+        self.assertEqual(news.parse_time("2026-10-30T09:00:00").isoformat(), "2026-10-30T03:30:00")
+        self.assertEqual(news.parse_time("Fri, 30 Oct 2026 09:00:00 +0530").isoformat(), "2026-10-30T03:30:00")
         self.assertIsNone(news.parse_time("soon"))
 
-    def test_yahoo_symbols(self):
-        self.assertEqual(news.yahoo_symbol("BRK.B"), "BRK-B")
+    def test_bad_xml_is_a_news_error(self):
+        with self.assertRaises(news.NewsError):
+            news.parse_rss(b"<html>not a feed", "NSE announcements")
+
+    def test_chart(self):
+        m = news.parse_chart(raw("chart-SYNTHA.json"), "SYNTHA")
+        self.assertEqual((m["price"], m["prev_close"], m["pct"]), (105.0, 100.0, 5.0))
+        with self.assertRaises(news.NewsError):
+            news.parse_chart(b"{}", "X")
+
+    def test_names_file(self):
+        names = news.read_names(raw("EQUITY_L.csv").decode())
+        self.assertEqual(names["SYNTHA"], "Synthetic Alpha Limited")
 
 
-class Tagging(unittest.TestCase):
-    def test_touches_and_tags(self):
-        items = news.parse_rss(raw("yahoo-KO.xml"), "KO")
-        watch = {"KO": "Coca-Cola", "CVX": "Chevron", "AAPL": "Apple"}
-        news.tag(items, watch)
-        by = {i["title"][:20]: i for i in items}
-        chevron = by["Coca-Cola or Chevron"]
-        self.assertEqual(chevron["touches"], ["CVX", "KO"])
-        self.assertIn("capital", chevron["tags"])  # dividend
-        self.assertEqual(by["Is Coca-Cola (KO) St"]["touches"], ["KO"])
+class Matching(unittest.TestCase):
+    def item(self, title, symbol=None, source="Moneycontrol"):
+        return {"id": "x:" + title, "source": source, "symbol": symbol, "title": title, "summary": "",
+                "link": "", "time": None}
 
-    def test_earnings_filings_are_tagged(self):
-        items = news.tag(news.parse_sec_atom(raw("sec-8-K-0000021344.xml"), "KO"), {"KO": None})
-        self.assertEqual(items[0]["tags"][0], "earnings")
-        self.assertFalse(items[1]["important"])  # 8.01 other events
+    def tagged(self, title, watch=WATCH, **kw):
+        return news.tag([self.item(title, **kw)], watch)
 
-    def test_dedupe_merges_the_same_story(self):
-        a = news.parse_rss(raw("yahoo-AAPL.xml"), "AAPL")
-        b = news.parse_rss(raw("yahoo-AAPL.xml"), "GOOGL")
-        items = news.dedupe(news.tag(a + b, {"AAPL": None, "GOOGL": None}))
-        self.assertEqual(len(items), 6)
-        self.assertEqual(items[0]["touches"], ["AAPL", "GOOGL"])
+    def test_company_name_is_an_exact_match(self):
+        r = self.tagged("Synthetic Beta shares jump on block deal")
+        self.assertEqual((r[0]["touches"], r[0]["possible"]), (["SYNTHB"], []))
+        self.assertEqual(r[0]["tags"], ["deal"])
+
+    def test_symbol_forms(self):
+        for title in ("SYNTHA - outcome of board meeting", "Alpha story (SYNTHA) rises", "Shares of NSE: SYNTHA fall"):
+            self.assertEqual(self.tagged(title)[0]["touches"], ["SYNTHA"], title)
+
+    def test_an_unwatched_company_is_dropped(self):
+        self.assertEqual(self.tagged("Synthetic Gamma plans buyback"), [])
+
+    def test_a_short_symbol_as_a_bare_word_does_not_match(self):
+        watch = {"ITC": "ITC Limited", "TCS": None}
+        self.assertEqual(self.tagged("Rising demand for TCS style outsourcing", watch=watch), [])
+        self.assertEqual(self.tagged("ITC Limited posts profit", watch=watch)[0]["touches"], ["ITC"])
+        self.assertEqual(self.tagged("Shares of (TCS) rise", watch=watch)[0]["touches"], ["TCS"])
+
+    def test_symbols_with_punctuation_are_escaped(self):
+        watch = {"M&M": "Mahindra & Mahindra Limited", "BAJAJ-AUTO": None}
+        self.assertEqual(self.tagged("(M&M) tractor sales up", watch=watch)[0]["touches"], ["M&M"])
+        self.assertEqual(self.tagged("(BAJAJ-AUTO) exports", watch=watch)[0]["touches"], ["BAJAJ-AUTO"])
+
+    def test_a_distinctive_first_word_is_only_a_possible_match(self):
+        watch = {"INFYX": "Infyx Technologies Limited"}
+        r = self.tagged("Infyx wins a large order", watch=watch)
+        self.assertEqual((r[0]["touches"], r[0]["possible"]), ([], ["INFYX"]))
+        r = self.tagged("Infyx Technologies wins a large order", watch=watch)
+        self.assertEqual((r[0]["touches"], r[0]["possible"]), (["INFYX"], []))
+
+    def test_a_common_first_word_never_matches_alone(self):
+        watch = {"TATAPWR": "Tata Power Company Limited", "ADANIENT": "Adani Enterprises Limited"}
+        self.assertEqual(self.tagged("Tata Motors and Adani group in the news", watch=watch), [])
+
+    def test_a_first_word_two_of_your_companies_share_is_dropped(self):
+        self.assertEqual(self.tagged("Synthetic energy stocks rally"), [])
+
+    def test_a_yahoo_item_belongs_to_its_symbol(self):
+        r = self.tagged("Some headline with no names", symbol="SYNTHA", source="Yahoo Finance")
+        self.assertEqual(r[0]["touches"], ["SYNTHA"])
+
+    def test_tags(self):
+        cases = {"Board meeting on 5 Nov to consider results": {"results", "board meeting"},
+                 "SEBI order against promoter": {"legal"}, "Broker raises target price": {"analyst"},
+                 "ASM stage 2 for the stock": {"surveillance"}, "Bonus and stock split proposed": {"capital"},
+                 "RBI policy keeps repo rate": {"macro", "regulatory"}}
+        for title, want in cases.items():
+            got = set(self.tagged(title, symbol="SYNTHA")[0]["tags"])
+            self.assertTrue(want <= got, (title, got))
+
+    def test_dedupe_merges_the_same_story_from_two_sources(self):
+        a = self.item("Same story", symbol="SYNTHA")
+        a["time"] = news.parse_time("2026-10-30T09:00:00")
+        b = self.item("Same story")
+        b["time"] = a["time"]
+        b["id"] = "y"
+        out = news.dedupe(news.tag([a, b], WATCH) if False else [dict(a, touches=["SYNTHA"], possible=[]),
+                                                                 dict(b, touches=["SYNTHB"], possible=[])])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["touches"], ["SYNTHA", "SYNTHB"])
 
 
-class Check(unittest.TestCase):
+class Warnings(unittest.TestCase):
+    def test_results_today_warns_but_yesterdays_does_not(self):
+        now = news.parse_now(NOW)
+        today = {"tags": ["results"], "touches": ["SYNTHA"], "title": "Q2 results", "time": news.parse_time("2026-10-30T02:00:00")}
+        yday = {"tags": ["results"], "touches": ["SYNTHB"], "title": "Q2 results", "time": news.parse_time("2026-10-29T02:00:00")}
+        other = {"tags": ["analyst"], "touches": ["SYNTHC"], "title": "upgrade", "time": news.parse_time("2026-10-30T02:00:00")}
+        self.assertEqual(list(news.results_warnings([today, yday, other], now)), ["SYNTHA"])
+
+
+class Selection(unittest.TestCase):
+    def test_window_and_seen(self):
+        now = news.parse_now(NOW)
+        items = [{"id": "a", "time": news.parse_time("2026-10-30T02:00:00")},
+                 {"id": "b", "time": news.parse_time("2026-10-20T02:00:00")},
+                 {"id": "c", "time": news.parse_time("2026-10-31T02:00:00")},     # from after --now
+                 {"id": "d", "time": None}]
+        state = {}
+        shown = news.select(items, state, now, hours=48)
+        self.assertEqual(sorted(i["id"] for i in shown), ["a", "d"])
+        news.remember(items, state, now)
+        self.assertEqual(news.select(items, state, now, hours=48), [])
+        self.assertEqual(len(news.select(items, state, now, hours=48, show_all=True)), 2)
+
+    def test_old_state_is_pruned(self):
+        now = news.parse_now(NOW)
+        state = {"seen": {"old": "2026-01-01T00:00:00", "new": "2026-10-29T00:00:00"}}
+        news.remember([], state, now)
+        self.assertEqual(list(state["seen"]), ["new"])
+
+
+class EndToEnd(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.state = os.path.join(self.tmp.name, "state", "news.json")
-        self.base = ["--offline", DIR, "--state", self.state, "--now", NOW,
-                     "--portfolio", os.path.join(self.tmp.name, "none.json"),
-                     "--watchlist", os.path.join(self.tmp.name, "none.json"),
-                     "--plan", os.path.join(self.tmp.name, "none.json")]
+        self.d = tempfile.mkdtemp()
+        self.wl = os.path.join(self.d, "watchlist.json")
+        write(self.wl, {"hits": [{"symbol": "SYNTHA", "name": "Synthetic Alpha Limited"}, {"symbol": "SYNTHB"}]})
+        self.state = os.path.join(self.d, "state", "news.json")
+        self.cfg = os.path.join(self.d, "config.json")
+        write(self.cfg, {"news_sources": {}, "moneycontrol_sections": ["latestnews"]})
 
     def tearDown(self):
-        self.tmp.cleanup()
+        shutil.rmtree(self.d)
 
-    def test_new_items_once_newest_first(self):
-        code, out, err = run(["--tickers", "AAPL", "KO", "--hours", "24", "--json"] + self.base)
-        self.assertEqual(code, 0, err)
-        data = json.loads(out)
-        times = [i["time"] for i in data["items"]]
-        self.assertEqual(times, sorted(times, reverse=True))
-        self.assertEqual(len(data["items"]), 10)  # 6 Apple + 4 Coca-Cola headlines, filings are older
-        code, out, _ = run(["--tickers", "AAPL", "KO", "--hours", "24"] + self.base)
+    def run_news(self, *extra):
+        argv = ["--watchlist", self.wl, "--plan", os.path.join(self.d, "p"), "--portfolio", os.path.join(self.d, "q"),
+                "--state", self.state, "--config", self.cfg, "--offline", DIR, "--now", NOW] + list(extra)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = news.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_report_then_nothing_new(self):
+        code, out, _ = self.run_news()
+        self.assertEqual(code, 0)
+        self.assertIn("RESULTS TODAY: SYNTHA", out)
+        self.assertIn("MOVING", out)
+        self.assertIn("IST", out)
+        self.assertNotIn(" ET", out)
+        for source in ("Yahoo Finance", "NSE announcements", "Moneycontrol"):
+            self.assertIn(source, out)
+        self.assertNotIn("Old story from last week", out)         # outside the 48-hour window
+        self.assertNotIn("Gamma", out)                             # not on the watchlist
+        story = [ln for ln in out.splitlines() if ln.startswith("  2026") and "Q2 results: net profit up 26%" in ln]
+        self.assertEqual(len(story), 1)                                       # two sources, one story
+        code, out, _ = self.run_news()
         self.assertEqual(code, 1)
         self.assertIn("Nothing new.", out)
+        self.assertIn("RESULTS TODAY", out)                        # the warning does not depend on what is new
+        code, out, _ = self.run_news("--all")
+        self.assertEqual(code, 1)                                  # nothing NEW, though --all lists the old ones
+        self.assertIn("Synthetic Beta shares jump on block deal", out)
 
-    def test_filings_show_in_a_wider_window(self):
-        code, out, err = run(["--tickers", "AAPL", "--hours", "2400"] + self.base)
-        self.assertEqual(code, 0, err)
-        self.assertIn("! 2026-07-30 16:30 ET  AAPL", out)  # 20:30 UTC, New York time
-        self.assertIn("earnings results", out)
-        self.assertIn("Not financial advice", out)
-        self.assertNotIn(chr(0x2014), out)
-
-    def test_tickers_from_watchlist_and_plan(self):
-        wl = os.path.join(self.tmp.name, "watchlist.json")
-        with open(wl, "w") as fh:
-            json.dump({"created_by": "trader-scanner", "hits": [{"symbol": "KO", "setups": ["orb"]}]}, fh)
-        plan = os.path.join(self.tmp.name, "plan.json")
-        with open(plan, "w") as fh:
-            json.dump({"created_by": "trader-exit", "symbol": "AAPL"}, fh)
-        self.assertEqual(sorted(news.watch_from_files("/nonexistent.json", wl, plan)), ["AAPL", "KO"])
-        args = list(self.base)
-        args[args.index("--watchlist") + 1] = wl
-        code, out, err = run(["--json", "--dry-run", "--hours", "24"] + args)
-        self.assertEqual(code, 0, err)
-        tickers = {t for i in json.loads(out)["items"] for t in i["touches"]}
-        self.assertEqual(tickers, {"KO"})
+    def test_dry_run_leaves_no_state(self):
+        self.run_news("--dry-run")
         self.assertFalse(os.path.exists(self.state))
 
-    def test_no_tickers_is_an_error(self):
-        code, _, err = run(self.base)
+    def test_sources_can_be_switched_off(self):
+        write(self.cfg, {"news_sources": {"moneycontrol": False, "nse": False}})
+        _, out, _ = self.run_news()
+        self.assertNotIn("Moneycontrol", out)
+        self.assertNotIn("NSE announcements", out)
+        self.assertIn("Yahoo Finance", out)
+
+    def test_a_failing_source_is_reported_and_the_rest_still_run(self):
+        write(self.cfg, {"news_sources": {}, "moneycontrol_sections": ["latestnews", "results"]})
+        _, out, _ = self.run_news()
+        self.assertIn("note: Moneycontrol results", out)
+        self.assertIn("Yahoo Finance", out)
+
+    def test_json(self):
+        _, out, _ = self.run_news("--json")
+        doc = json.loads(out)
+        self.assertEqual(list(doc["results_today"]), ["SYNTHA"])
+        self.assertTrue(any(m["moving"] for m in doc["moves"]))
+        self.assertTrue(all(i["time"] for i in doc["items"]))
+
+    def test_no_symbols_is_an_error(self):
+        os.remove(self.wl)
+        code, _, err = self.run_news()
         self.assertEqual(code, 2)
-        self.assertIn("no tickers", err)
+        self.assertIn("no symbols", err)
 
-    def test_sec_needs_a_user_agent(self):
-        old = os.environ.pop("SEC_USER_AGENT", None)
-        try:
-            self.assertIsNone(news.sec_user_agent(None, "/nonexistent.json"))
-            self.assertIsNone(news.sec_user_agent("Your Name you@example.com"))
-            self.assertEqual(news.sec_user_agent("Ada ada@example.org"), "Ada ada@example.org")
-            with self.assertRaises(news.NewsError):
-                news.Fetcher(None).get("https://www.sec.gov/x", "x", sec=True)
-        finally:
-            if old is not None:
-                os.environ["SEC_USER_AGENT"] = old
+    def test_symbols_flag_overrides_the_watchlist(self):
+        _, out, _ = self.run_news("--symbols", "SYNTHB", "--no-moves")
+        self.assertNotIn("RESULTS TODAY", out)
+        self.assertIn("SYNTHB", out)
 
-    def test_the_reel_tsla_morning(self):
-        # The reel's real feed: Yahoo Finance headlines for TSLA, Monday Oct 19 2026, checked at 10:15 AM ET
-        code, out, err = run(["--tickers", "TSLA", "--hours", "6", "--no-sec", "--no-moves",
-                              "--now", "2026-10-19T10:15:00-04:00"] + self.base[:4])
-        self.assertEqual(code, 0, err)
-        self.assertIn("2026-10-19 08:04 ET  TSLA", out)
-        self.assertNotIn("10:32 ET", out)  # published after the pinned 10:15 clock
-        self.assertIn("Tesla-SpaceX Merger Mania Strikes Wall Street Ahead of Earnings", out)
-        merger = [l for l in out.splitlines() if "Merger Mania" in l]
-        tags = out.splitlines()[out.splitlines().index(merger[0]) + 1]
-        self.assertIn("earnings", tags)
-        self.assertIn("deal", tags)
-        self.assertIn("Checked 2026-10-19 10:15 ET", out)
-        self.assertEqual(len([l for l in out.splitlines() if l.startswith("  2026-10-19")]), 16)  # 18 in the feed, 2 after 10:15
-        # the price line, from the chart fetched at 10:52
-        code, out, err = run(["--tickers", "TSLA", "--hours", "6", "--no-sec", "--dry-run",
-                              "--now", "2026-10-19T10:52:00-04:00"] + self.base[:4])
-        self.assertRegex(out, r"TSLA\s+366\.4[78] \+3\.31% vs yesterday's close 354\.72 at 10:52 ET  MOVING")
+    def test_names_come_from_the_universe_file_when_the_watchlist_has_none(self):
+        write(self.wl, {"hits": [{"symbol": "SYNTHB"}]})
+        _, out, _ = self.run_news("--no-moves")
+        self.assertIn("Synthetic Beta shares jump on block deal", out)     # matched by name, via EQUITY_L.csv
 
-    def test_moves(self):
-        m = news.parse_chart(raw("chart-TSLA.json"), "TSLA")
-        self.assertEqual(m["prev_close"], 354.72)
-        self.assertEqual(m["pct"], 3.31)
-        self.assertEqual(news.to_eastern(m["time"]).strftime("%H:%M"), "10:52")
-        quiet = dict(m, pct=1.2)
-        self.assertNotIn("MOVING", news.render_moves([quiet])[0])
-        self.assertIn("MOVING", news.render_moves([quiet], move_pct=1.0)[0])
-        with self.assertRaises(news.NewsError):
-            news.parse_chart(b'{"chart": {"result": null}}', "ZZZZ")
-        # no chart file offline: no move line, no error note
-        code, out, _ = run(["--tickers", "KO", "--hours", "24", "--dry-run"] + self.base)
-        self.assertNotIn("vs yesterday's close", out)
-        self.assertNotIn("note:", out)
 
-    def test_new_york_time_follows_daylight_saving(self):
-        utc = datetime.datetime(2026, 1, 15, 15, 0, tzinfo=datetime.timezone.utc)
-        self.assertEqual(news.to_eastern(utc).hour, 10)  # EST, UTC-5
-        utc = datetime.datetime(2026, 10, 19, 14, 15, tzinfo=datetime.timezone.utc)
-        self.assertEqual(news.to_eastern(utc).hour, 10)  # EDT, UTC-4
-        utc = datetime.datetime(2026, 11, 1, 6, 30)       # 1:30 EST, just after the switch back
-        self.assertEqual(news.to_eastern(utc).hour, 1)
-
-    def test_day_trading_tags(self):
-        items = [{"id": "x", "source": "Yahoo Finance", "kind": "headline", "ticker": "TSLA",
-                  "title": "Trading halted in XYZ after FDA approval; futures rise before CPI",
-                  "summary": "", "link": "", "time": None}]
-        tags = news.tag(items, {"TSLA": None})[0]["tags"]
-        for t in ("halt", "regulatory", "macro"):
-            self.assertIn(t, tags)
-
-    def test_state_forgets_after_30_days(self):
-        state = {"seen": {"old": "2026-08-01T00:00:00+00:00"}}
-        now = news.parse_time(NOW)
-        news.remember([], state, now)
-        self.assertNotIn("old", state["seen"])
-        self.assertEqual(state["last_check"], now.isoformat())
+class Source(unittest.TestCase):
+    def test_no_us_leftovers(self):
+        with open(os.path.join(ROOT, "trader-news", "news.py"), encoding="utf-8") as fh:
+            text = fh.read()
+        for bad in ("sec.gov", "EDGAR", "8-K", "Eastern", "NYSE", "NASDAQ", "region=US"):
+            self.assertNotIn(bad, text, bad)
 
 
 if __name__ == "__main__":
