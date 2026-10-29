@@ -219,6 +219,19 @@ RSS feeds are plain public files, so trader-news and trader-insider will try
 them; if they fail on your machine, the tools say so and fall back to Yahoo
 headlines only.
 
+### Moneycontrol and Groww (your request of 2026-10-29)
+
+| source | finding | status |
+| --- | --- | --- |
+| Moneycontrol RSS | Section feeds at `https://www.moneycontrol.com/rss/<section>.xml`: `latestnews`, `business`, `marketreports`, `economy`, `results`, `iponews`, `buzzingstocks` (names from third-party directories and an old GitHub code sample). They are market-wide feeds, not one feed per stock, so a headline is matched to your symbols by the company's name. | **UNVERIFIED**: moneycontrol.com could not be fetched from the sandbox, the feed list page was not read, and the terms of use for the feeds were not seen. Personal, non-commercial reading is assumed. RECHECK on your machine. |
+| Groww news | groww.in/stock-feed is a web page with no public RSS or news API found. Groww's Trade API (₹499 a month + taxes) is for market data and orders, not news. A Groww Blog "stocks" feed exists in directories, but it is educational articles, not news. | **No stable public news source.** Reading groww.in/stock-feed would mean scraping a web page, which your rules rule out. Not built. |
+
+Sources: https://feeder.co/discover/01b3ab436c/moneycontrol-com,
+https://www.einpresswire.com/world-media-directory/detail/25453,
+https://gist.github.com/cd55ff5a4416e766803a13c078a08b88,
+https://rss.feedspot.com/Moneycontrol_rss_feeds/, https://groww.in/stock-feed,
+https://groww.in/trade-api.
+
 ## 11. Assumptions made while building (Phase 2, 2026-10-29)
 
 | assumption | where | status |

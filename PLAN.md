@@ -86,7 +86,12 @@ after the checks in VERIFY.md. Nothing in the skills has been changed yet.
 3. Paper broker, charges calculator, end-of-day reconcile, skipped signals.
 4. Notion setup, outbox sync, rebuild, daily summary, weekly report.
 5. Kite adapter (disabled, mock-tested) + golive.py check / steps.
-6. News (Yahoo .NS + NSE RSS if reachable), analyst (pasted results), insider (NSE PIT RSS).
+6. News (Yahoo .NS + NSE RSS if reachable + Moneycontrol RSS, added on your request
+   of 2026-10-29), analyst (pasted results), insider (NSE PIT RSS). Moneycontrol's
+   feeds are market-wide, so headlines are matched to your stocks by company name
+   and tagged with the source; each feed can be switched off in the config. Groww
+   is left out: it has no public news feed, only a web page that would have to be
+   scraped (VERIFY.md section 10).
 7. README for India, worked example on real NSE data, full test run, summary.
 
 ## Changes made in Phase 2 (say no to any of them)
