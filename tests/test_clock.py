@@ -9,7 +9,8 @@ from _load import load, ROOT, ist
 
 SCRIPTS = [("trader-alerts", "alerts"), ("trader-scanner", "scan"), ("trader-entry", "entry"),
            ("trader-exit", "exit"), ("trader-timemachine", "timemachine"), ("trader-budget", "size"),
-           ("trader-risk", "check"), ("trader-broker", "ticket"), ("trader-broker", "paper")]
+           ("trader-risk", "check"), ("trader-broker", "ticket"), ("trader-broker", "paper"),
+           ("trader-journal", "journal")]
 START = "# ---------------------------------------------------------------- NSE clock (same block in every script)"
 END = "# ---------------------------------------------------------------- end NSE clock"
 alerts = load("trader-alerts", "alerts")

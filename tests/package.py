@@ -17,7 +17,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONVERTED = ["trader-scanner", "trader-entry", "trader-exit", "trader-timemachine", "trader-budget",
-             "trader-risk", "trader-broker", "trader-alerts"]
+             "trader-risk", "trader-broker", "trader-alerts", "trader-journal"]
 SKIP = ("__pycache__",)
 
 
