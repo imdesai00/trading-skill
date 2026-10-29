@@ -130,6 +130,24 @@ system's.
   others at 15:25), and may charge for it (the charge was not verified).
   Being flat by 15:00 avoids that.
 
+## The Kite adapter (`kite.py`, off unless live and enabled)
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/kite.py" check --profile FILE        # is Kite connected and verified today?
+python3 "${CLAUDE_SKILL_DIR}/kite.py" prepare --ticket ID         # exact place_order payload, after every gate
+python3 "${CLAUDE_SKILL_DIR}/kite.py" record --ticket ID --response FILE
+python3 "${CLAUDE_SKILL_DIR}/kite.py" stop-ticket --trade ID      # after the entry fills: the SL-M stop to approve
+python3 "${CLAUDE_SKILL_DIR}/kite.py" sync --orders F --trades F --positions F
+```
+
+A live trade is three separate orders, each with its own trader-risk check, its own typed
+"yes" and Claude's own Allow once card: (1) the entry BUY (MIS); (2) after it fills, a resting
+SL-M stop SELL; (3) the exit: cancel the stop first (that cancel needs its own yes), then a
+market SELL. The target is not a resting order. With the switches off, `kite.py` makes no Kite
+call at all (exit code 2). Act on every WARNING that `sync` prints (no stop, rejected stop,
+position mismatch) at once. The hosted `mcp.kite.trade` server probably has no `place_order`:
+see "Connecting Kite later".
+
 ## Connecting Kite later (only you do this)
 
 The full steps come with the Kite adapter. The outline, from VERIFY.md:

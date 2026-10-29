@@ -72,6 +72,7 @@ or in the `SEC_USER_AGENT` environment variable.
 | `/trader-alerts` | Price Alerts | Rings when a price, a stop or the opening bell hits. |
 | `/trader-analyst` | Earnings Analyst | Reads earnings reports and sums up what changed. |
 | `/trader-pelosi` | Pelosi Tracker | Reads Congress's stock-trade disclosures the minute they are filed. |
+| `/trader-golive` | Go-Live Review | Reads the paper record plainly (is it luck?) and lists the steps you take yourself to go live. Decides nothing. |
 | `/trader-journal` | Notion Journal | Keeps the paper-trading record in Notion: trades, skipped signals, daily and weekly reports. |
 
 ## How to use it

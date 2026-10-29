@@ -76,7 +76,8 @@ DEFAULTS = {
     "require_stop": True, "no_entries_before": "09:30", "no_entries_after": "14:45", "flat_by": "15:00",
     "paper_slippage_pct": 0.05, "limits_include_slippage": True, "blocked": [],
 }
-NEUTRAL_FIELDS = ("symbol", "exchange", "side", "qty", "product", "entry_type", "limit_price", "stop", "target")
+NEUTRAL_FIELDS = ("symbol", "exchange", "side", "qty", "product", "entry_type", "limit_price", "stop", "target",
+                  "action", "order_ref")
 SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9&\-]{0,19}$")
 HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 EPS = 1e-9
@@ -300,8 +301,8 @@ def ledger_view(ledger, today, capital):
         balance = capital + sum(_f(t.get("net_pnl")) or 0 for t in trades if t.get("status") == "closed")
     d = datetime.date.fromisoformat(today)
     week0 = monday_of(d).isoformat()
-    opened_today = [t for t in trades if str(t.get("date")) == today]
-    open_now = [t for t in trades if t.get("status") == "open"]
+    opened_today = [t for t in trades if str(t.get("date")) == today and t.get("status") != "failed"]
+    open_now = [t for t in trades if t.get("status") in ("open", "pending_fill")]   # a placed entry counts at once
     closed = [t for t in trades if t.get("status") == "closed"]
     real_today = sum(_f(t.get("net_pnl")) or 0 for t in closed if str(t.get("exit_date") or t.get("date")) == today)
     real_week = sum(_f(t.get("net_pnl")) or 0 for t in closed
@@ -309,6 +310,8 @@ def ledger_view(ledger, today, capital):
     open_risk = sum(_f(t.get("max_loss")) or 0 for t in open_now)
     held = {}
     for t in open_now:
+        if t.get("status") == "pending_fill":
+            continue                      # not yet shares you hold: there is nothing to sell until it fills
         s = str(t.get("symbol", "")).upper()
         held[s] = held.get(s, 0) + int(_f(t.get("qty")) or 0)
     return {"balance": round(balance, 2), "open": open_now, "held": held, "entries_today": len(opened_today),
@@ -394,6 +397,7 @@ def check(orders, cfg, ledger=None, prices=None, kite_state=None, today=None, no
         sym = str(o.get("symbol", "")).strip().upper()
         side = str(o.get("side", "")).strip().lower()
         etype = str(o.get("entry_type", "market")).strip().lower()
+        action = str(o.get("action") or "").strip().lower()
         qty = _f(o.get("qty"))
         plan = o.get("plan") if isinstance(o.get("plan"), dict) else {}
 
@@ -409,15 +413,33 @@ def check(orders, cfg, ledger=None, prices=None, kite_state=None, today=None, no
             reasons.append("format: this pack trades NSE only, got exchange %r" % o.get("exchange"))
         if str(o.get("product", "MIS")).upper() != "MIS":
             reasons.append("format: product must be MIS (intraday); delivery, F&O and margin products are off")
-        if etype not in ("market", "limit"):
-            reasons.append("format: entry_type must be market or limit, got %r" % etype)
+        if action and action != "cancel":
+            reasons.append("format: unknown action %r (only cancel)" % action)
+        if action == "cancel":
+            if mode != "live":
+                reasons.append("format: cancel is for live orders; paper stops are simulated and need no order")
+            if not o.get("order_ref"):
+                reasons.append("format: a cancel needs order_ref, the Kite order id of the resting stop")
+            if side != "sell":
+                reasons.append("format: a cancel here is for the protective stop, a sell")
+        elif etype not in ("market", "limit", "stop"):
+            reasons.append("format: entry_type must be market, limit or stop, got %r" % etype)
         if etype == "limit" and not _f(o.get("limit_price")):
             reasons.append("format: a limit order needs a limit_price")
+        if etype == "stop" and not action:
+            if side != "sell":
+                reasons.append("format: a stop order here is the protective stop-loss, a sell")
+            if not _f(o.get("stop")):
+                reasons.append("format: a stop order needs its trigger price in stop")
+            if mode != "live":
+                reasons.append("format: paper stops are simulated by the paper broker; a stop order is for live mode")
         reasons.extend(mode_reasons)
 
         # entry or exit
         have = held.get(sym, 0)
         exiting = side == "sell" and qty is not None and have > 0 and qty <= have + EPS
+        if action == "cancel" and side == "sell":
+            exiting = True              # taking a stop away is never blocked: getting out must stay possible
         kind = "exit" if exiting else "entry"
         if side == "sell" and not exiting and not c.get("allow_short"):
             reasons.append("short: selling %s %s but you hold %d; short selling is off" % (
@@ -429,6 +451,8 @@ def check(orders, cfg, ledger=None, prices=None, kite_state=None, today=None, no
         ref, ref_from = None, None
         if etype == "limit":
             ref, ref_from = _f(o.get("limit_price")), "limit"
+        elif etype == "stop" and _f(o.get("stop")):
+            ref, ref_from = _f(o.get("stop")), "plan"
         else:
             cands = [(p, w) for p, w in ((plan_entry, "plan"), (live, "price")) if p]
             if cands:

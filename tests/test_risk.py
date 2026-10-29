@@ -87,7 +87,7 @@ class PerTradeLimits(unittest.TestCase):
         self.assertIn("must be below the entry", reasons(ck([order(stop=1420.0)])))
 
     def test_format_and_products(self):
-        r = reasons(ck([order(product="CNC", exchange="BSE", qty=4.5, entry_type="stop")]))
+        r = reasons(ck([order(product="CNC", exchange="BSE", qty=4.5, entry_type="iceberg")]))
         for word in ("product must be MIS", "NSE only", "whole number of shares", "entry_type must be"):
             self.assertIn(word, r)
         self.assertIn("not an NSE symbol", reasons(ck([order(symbol="BTC/INR")])))
@@ -174,6 +174,50 @@ class WindowAndMode(unittest.TestCase):
         res = ck(prices={"SYNTHA": 1419.0}, times={"SYNTHA": ist("2026-10-30 09:20")})
         self.assertEqual(res["results"][0]["entry_ref"], 1416.0)
         self.assertIn("older than 15 minutes", " ".join(res["results"][0]["warnings"]))
+
+
+class StopAndCancelOrders(unittest.TestCase):
+    LIVE = {"mode": "live", "kite_enabled": True}
+    KITE = {"verified": True, "date": TODAY}
+    HELD = {"balance": 100000, "trades": [trade(symbol="SYNTHA", qty=45, status="open", net_pnl=None,
+                                                 entry_fill=1416.7)]}
+
+    def stop_order(self, **over):
+        o = {"symbol": "SYNTHA", "exchange": "NSE", "side": "sell", "qty": 45, "product": "MIS",
+             "entry_type": "stop", "stop": 1408.0}
+        o.update(over)
+        return o
+
+    def test_the_protective_stop_is_an_exit_in_live_mode(self):
+        res = ck([self.stop_order()], self.LIVE, self.HELD, kite=self.KITE, now=ist("2026-10-30 09:53"))
+        r = res["results"][0]
+        self.assertEqual((r["verdict"], r["kind"]), ("PASS", "exit"))
+
+    def test_a_stop_for_more_than_you_hold_is_a_short(self):
+        res = ck([self.stop_order(qty=50)], self.LIVE, self.HELD, kite=self.KITE)
+        self.assertIn("short selling is off", reasons(res))
+
+    def test_a_stop_order_needs_a_trigger_a_sell_and_live_mode(self):
+        self.assertIn("needs its trigger price", reasons(ck([self.stop_order(stop=None)], self.LIVE, self.HELD,
+                                                              kite=self.KITE)))
+        self.assertIn("protective stop-loss, a sell", reasons(ck([order(entry_type="stop")], self.LIVE,
+                                                                 kite=self.KITE)))
+        self.assertIn("paper stops are simulated", reasons(ck([self.stop_order()], {}, self.HELD)))
+
+    def test_cancelling_the_stop_is_never_blocked_by_limits_or_the_window(self):
+        led = dict(self.HELD, balance=91000)
+        o = {"symbol": "SYNTHA", "exchange": "NSE", "side": "sell", "qty": 45, "product": "MIS",
+             "entry_type": "market", "action": "cancel", "order_ref": "240101000999"}
+        res = ck([o], self.LIVE, led, kite=self.KITE, now=ist("2026-10-30 15:05"))
+        self.assertEqual(res["results"][0]["verdict"], "PASS")
+        self.assertEqual(res["results"][0]["kind"], "exit")
+
+    def test_bad_cancels(self):
+        o = {"symbol": "SYNTHA", "exchange": "NSE", "side": "sell", "qty": 45, "product": "MIS", "action": "cancel"}
+        self.assertIn("needs order_ref", reasons(ck([o], self.LIVE, self.HELD, kite=self.KITE)))
+        self.assertIn("cancel is for live orders", reasons(ck([dict(o, order_ref="1")], {}, self.HELD)))
+        self.assertIn("unknown action", reasons(ck([dict(o, action="modify", order_ref="1")], self.LIVE, self.HELD,
+                                                   kite=self.KITE)))
 
 
 class Exits(unittest.TestCase):

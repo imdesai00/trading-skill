@@ -61,7 +61,8 @@ UA = "Mozilla/5.0 (compatible; india-day-trader-skill/1.0)"
 HOSTS = ("query2", "query1")
 BACKOFF = 5.0
 INTERVALS = {"1m": 60, "5m": 300}
-NEUTRAL_FIELDS = ("symbol", "exchange", "side", "qty", "product", "entry_type", "limit_price", "stop", "target")
+NEUTRAL_FIELDS = ("symbol", "exchange", "side", "qty", "product", "entry_type", "limit_price", "stop", "target",
+                  "action", "order_ref")
 DEFAULTS = {"capital_inr": 100000, "paper_slippage_pct": 0.05, "flat_by": "15:00"}
 EPOCH = datetime.datetime(1970, 1, 1)
 
@@ -648,6 +649,8 @@ def cmd_open(a):
         raise PaperError("that yes was given in %s mode, not paper" % appr.get("mode"))
     led = load_ledger(a.ledger, cfg)
     sym = str(order.get("symbol", "")).upper()
+    if order.get("action") or order.get("entry_type") == "stop":
+        raise PaperError("stop and cancel orders are for live mode; paper stops are simulated by reconcile")
     if str(order.get("side")) == "sell":
         t = next((x for x in led["trades"] if x["status"] == "open" and x["symbol"] == sym), None)
         if not t:

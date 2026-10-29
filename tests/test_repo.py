@@ -8,7 +8,7 @@ from _load import ROOT
 # v2, the day-trading pack: the eleven folders the reel's repo card shows
 SKILLS = ["trader-scanner", "trader-news", "trader-entry", "trader-exit", "trader-timemachine",
           "trader-risk", "trader-budget", "trader-broker", "trader-alerts", "trader-analyst",
-          "trader-pelosi", "trader-journal"]
+          "trader-pelosi", "trader-journal", "trader-golive"]
 ABOUT = ("11 Claude skills for day trading: scan thousands of charts, track breaking news, time every "
          "entry and exit, and replay every outcome before you risk a dollar.")
 # skills on the way to an order carry the safety block
@@ -224,7 +224,8 @@ class Packaging(unittest.TestCase):
             a, b = pkg.build("trader-risk", d), os.path.join(d, "again")
             with open(a, "rb") as fh:
                 first = fh.read()
-            self.assertEqual(first, open(pkg.build("trader-risk", b), "rb").read())   # repeatable
+            with open(pkg.build("trader-risk", b), "rb") as fh:
+                self.assertEqual(first, fh.read())   # repeatable
         finally:
             shutil.rmtree(d)
 
