@@ -44,9 +44,16 @@ python3 "${CLAUDE_SKILL_DIR}/ticket.py" log
 is a real yes for that order, builds the exit ticket, and keeps the log in
 `trader/state/broker.json`. `--now "2026-10-30 09:51"` pins the clock (India time).
 
-The paper broker (`paper.py`: fills, end-of-day reconcile, skipped signals)
-and the Kite adapter (`kite.py`, disabled unless live) are added in the next
-build phases; their steps will be here.
+```bash
+python3 "${CLAUDE_SKILL_DIR}/paper.py" open --index 1            # after your yes: book the paper trade
+python3 "${CLAUDE_SKILL_DIR}/paper.py" reconcile                 # replay the bars: stop, target or flat-by
+python3 "${CLAUDE_SKILL_DIR}/paper.py" skip --index 1            # a no or a BLOCK: log the skipped signal
+python3 "${CLAUDE_SKILL_DIR}/paper.py" skip --from-plan          # a trade trader-budget refused
+python3 "${CLAUDE_SKILL_DIR}/paper.py" status                    # the paper account
+```
+
+`paper.py` is the paper broker: it never contacts a broker. The Kite adapter
+(`kite.py`, disabled unless live) comes in a later build phase.
 
 ## What it reads and writes
 
@@ -56,6 +63,8 @@ build phases; their steps will be here.
 | `trader/config.json` | `mode` and `kite_enabled`, which only you change |
 | `trader/state/risk.json` | trader-risk's verdicts; only a PASS from today, in the same mode, is READY |
 | `trader/state/broker.json` | every yes, no, placed and failed, word for word |
+| `trader/state/paper.json` | the paper account: balance, every paper trade, every skipped signal (trader-risk reads it) |
+| `trader/timemachine.json` | the time machine's odds, copied into the paper trade |
 
 ## Steps: the entry
 
@@ -67,11 +76,43 @@ build phases; their steps will be here.
    If it prints "Not recorded", the reply was not an explicit yes for this
    order (for example "sure", "yes to all", or a yes that names a different
    stock or amount). Ask again. Never turn a reply into a yes yourself.
-4. Paper mode: no broker is contacted; the paper broker records the trade.
+4. Paper mode: no broker is contacted. Run `paper.py open --index N` to book it.
    Live mode: call the Kite `place_order` tool with exactly the payload the
    ticket printed; Claude's card appears: Allow once or Deny. Then
    `ticket.py result`. A failed order is not retried without a new check and a new yes.
-5. If the user says no, `ticket.py decline`: it is logged as a skipped signal.
+5. If the user says no, `ticket.py decline`, then `paper.py skip --index N`. A BLOCK from trader-risk
+   gets `paper.py skip --index N` too, and a plan trader-budget refused gets `paper.py skip --from-plan`.
+6. After 15:30: `paper.py reconcile`. Read the result back: the exit, gross, charges, net, R, the balance,
+   and every note (a fill worse than planned, a gap, a stop and target in one bar).
+
+## Paper trading: how a paper trade is filled
+
+| step | rule |
+| --- | --- |
+| entry | after your yes, `paper.py open` books it; it fills at the OPEN of the first 1-minute bar that starts at or after your yes, plus 0.05 % |
+| exits | `paper.py reconcile` walks the 1-minute bars from the entry bar on. The stop is checked before the target; a bar that touches both counts as the STOP |
+| stop | fills at the stop, or at the bar's open if the bar opened below it (a gap), minus 0.05 % |
+| target | fills at the target, minus 0.05 %, never better |
+| flat-by | still open at 15:00: the close of the last bar that ends by 15:00, minus 0.05 % |
+| your own exit | a yes to an exit ticket closes it at the next 1-minute bar's open, minus 0.05 % |
+| charges | the full Zerodha intraday charges on both legs (trader-budget/charges.py) |
+| record | Trade ID (PT-YYYYMMDD-NN), fills, exit reason, gross, charges, net, R, the loss planned at the stop, the time machine's odds, the risk verdict, news tags, your exact words, the balance after |
+
+A paper trade can lose more than the ₹500 planned when the fill comes in above
+the planned entry or the price gaps through the stop. The record says so, in
+plain words, with the amount. That is what live trading does too.
+
+Reconcile the same day, after 15:30: Yahoo keeps only about a week of 1-minute
+bars. `--interval 5m` replays on 5-minute bars when the 1-minute bars are gone,
+and the trade is noted as replayed on 5-minute bars. Run during the day, it
+only uses bars that have closed and leaves a trade open if nothing hit.
+
+**Skipped signals.** When you say no, or trader-risk blocks an order, or
+trader-budget refuses a plan, log it: `paper.py skip --index N` (or
+`--from-plan`). reconcile replays it the same way from the moment you skipped
+it and records what it would have made or lost after charges. It never touches
+the balance. Over four weeks this is how you compare your judgement with the
+system's.
 
 ## Steps: while it is open, and out by 15:00
 

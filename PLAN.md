@@ -83,7 +83,8 @@ after the checks in VERIFY.md. Nothing in the skills has been changed yet.
    NSE calendar with CAS, tick sizes, ₹ formatting, your limits. **(done)** Also
    moved in from later phases because the tests needed them: the charges
    calculator and trader-broker's ticket.py (the yes gate) on the new order format.
-3. Paper broker, charges calculator, end-of-day reconcile, skipped signals.
+3. Paper broker, charges calculator, end-of-day reconcile, skipped signals. **(done;
+   slippage in limits and SL-M confirmed 2026-10-29)**
 4. Notion setup, outbox sync, rebuild, daily summary, weekly report.
 5. Kite adapter (disabled, mock-tested) + golive.py check / steps.
 6. News (Yahoo .NS + NSE RSS if reachable + Moneycontrol RSS, added on your request

@@ -369,7 +369,8 @@ def check(orders, cfg, ledger=None, prices=None, kite_state=None, today=None, no
     weekly = _f(c.get("max_weekly_loss_inr"))
     used_day = max(0.0, -view["realised_today"]) + view["open_risk"]
     used_week = max(0.0, -view["realised_week"]) + view["open_risk"]
-    cash = view["balance"] - sum((_f(t.get("entry_fill")) or _f(t.get("entry")) or 0) * int(_f(t.get("qty")) or 0)
+    cash = view["balance"] - sum((_f(t.get("entry_fill")) or _f(t.get("planned_entry")) or _f(t.get("entry")) or 0)
+                                 * int(_f(t.get("qty")) or 0)
                                  for t in view["open"])
     buffer_inr = capital * float(c.get("cash_buffer_pct") or 0) / 100.0
     held = dict(view["held"])
