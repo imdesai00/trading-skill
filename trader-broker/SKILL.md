@@ -29,7 +29,9 @@ every time:
 
 No yes, no order. Paper mode keeps gates 1 and 2 so the practice is real.
 
-`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
+`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives). If your Claude does not
+set that variable, use the path of the folder this SKILL.md is in. Run every command from your working
+folder (the one that holds `trader/`), not from inside the skill folder.
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/ticket.py" show                     # every ticket, READY or not

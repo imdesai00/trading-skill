@@ -216,7 +216,12 @@ class Cli(unittest.TestCase):
     def test_a_refused_plan_is_a_skipped_signal_too(self):
         with open(self.p("plan.json"), "w") as fh:
             json.dump(dict(PLAN, target=1432.0), fh)
-        code, out, _ = self.pp("skip", "2026-10-30 09:51", "--from-plan", "--plan", self.p("plan.json"))
+        code, _, err = self.pp("skip", "2026-10-30 09:51", "--from-plan", "--sizing", self.p("nope.json"))
+        self.assertIn("run trader-budget size.py first", err)
+        code, _, _ = run(size, ["--plan", self.p("plan.json"), "--config", self.p("config.json"),
+                                "--now", "2026-10-30 09:51", "--paper", self.p("x"), "--sizing", self.p("sizing.json")])
+        self.assertEqual(code, 1)                                  # refused, but the sizing is saved
+        code, out, _ = self.pp("skip", "2026-10-30 09:51", "--from-plan", "--sizing", self.p("sizing.json"))
         self.assertEqual(code, 0)
         self.assertIn("budget refused: reward:risk after charges", out)
 

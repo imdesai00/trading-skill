@@ -15,3 +15,6 @@ claude_desktop_config.json
 
 __pycache__/
 *.pyc
+
+# built skill ZIPs (python3 tests/package.py)
+dist/

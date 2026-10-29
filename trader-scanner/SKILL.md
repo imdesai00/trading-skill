@@ -25,7 +25,9 @@ is not a prediction. SEBI's own study found most individual intraday traders
 in the cash segment lost money (VERIFY.md section 7); the scanner does not
 change that. It only saves you from flipping through a hundred charts by hand.
 
-`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
+`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives). If your Claude does not
+set that variable, use the path of the folder this SKILL.md is in. Run every command from your working
+folder (the one that holds `trader/`), not from inside the skill folder.
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scan.py" universe                       # NSE EQ list x NIFTY 100 -> trader/universe.txt

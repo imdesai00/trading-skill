@@ -54,8 +54,8 @@ import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(HERE), "trader-budget"))
-import charges as chg  # noqa: E402  (the one charges calculator)
+sys.path.insert(0, HERE)
+import charges as chg  # noqa: E402  (a copy of trader-budget/charges.py; a test keeps the copies identical)
 
 UA = "Mozilla/5.0 (compatible; india-day-trader-skill/1.0)"
 HOSTS = ("query2", "query1")
@@ -679,10 +679,9 @@ def cmd_skip(a):
     today = now_ist.date().isoformat()
     led = load_ledger(a.ledger, cfg)
     if a.from_plan:
-        sys.path.insert(0, os.path.join(os.path.dirname(HERE), "trader-budget"))
-        import size as sz
-        plan = read_json(a.plan, "plan")
-        s = sz.size_trade(plan, cfg, today=today)
+        s = read_json(a.sizing, "last sizing (run trader-budget size.py first)")
+        if s.get("date") != today:
+            raise PaperError("the last sizing is for %s, not today: run trader-budget size.py again" % s.get("date"))
         src = {"symbol": s["symbol"], "qty": s["qty"], "stop": s["stop"], "target": s["target"], "entry": s["entry"],
                "max_loss": s["max_loss"], "setup": s["setup"], "flat_by": s["flat_by"]}
         why = a.why or ("budget refused: " + (s["refusal"] or "no reason given"))
@@ -805,7 +804,7 @@ def main(argv=None):
     p.add_argument("--state", default="trader/state/broker.json")
     p.add_argument("--risk", default="trader/state/risk.json")
     p.add_argument("--from-plan", action="store_true", help="a signal trader-budget refused (no order was written)")
-    p.add_argument("--plan", default="trader/plan.json")
+    p.add_argument("--sizing", default="trader/state/sizing.json", help="trader-budget's last sizing")
     p.add_argument("--why")
     p = sub.add_parser("reconcile", help="replay the day's bars: fills, exits, skipped signals")
     common(p)

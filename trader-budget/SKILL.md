@@ -24,7 +24,9 @@ the size: the further away the stop, the fewer shares. Charges are part of
 the loss: on a ₹63,000 position a round trip costs about ₹67 with Zerodha, so
 they are counted before anything else. It writes a proposal only.
 
-`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
+`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives). If your Claude does not
+set that variable, use the path of the folder this SKILL.md is in. Run every command from your working
+folder (the one that holds `trader/`), not from inside the skill folder.
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/size.py" init                   # trader/config.json with your limits, once

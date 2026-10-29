@@ -605,6 +605,11 @@ def run_plan(a, cfg):
     cash = a.cash if a.cash is not None else paper_cash(a.paper)
     s = size_trade(plan, cfg, limit, price, cash, today)
     order = order_from(s, cfg)
+    if not a.no_state:       # for the paper broker's `skip --from-plan`, even when the plan was refused
+        os.makedirs(os.path.dirname(a.sizing) or ".", exist_ok=True)
+        with open(a.sizing, "w", encoding="utf-8") as fh:
+            json.dump(s, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
     if a.json:
         print(json.dumps({"sizing": s, "order": order, "notes": notes}, indent=2, ensure_ascii=False))
     else:
@@ -632,6 +637,8 @@ def main(argv=None):
     ap.add_argument("--limit", nargs="?", const="plan", help="a limit order (at the plan's entry, or this price)")
     ap.add_argument("--now", help='pretend it is this India time, e.g. "2026-10-30 09:50"')
     ap.add_argument("--write", nargs="?", const="trader/orders.json", metavar="PATH")
+    ap.add_argument("--sizing", default="trader/state/sizing.json", help="where the last sizing is saved")
+    ap.add_argument("--no-state", action="store_true", help="do not save the last sizing")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     try:

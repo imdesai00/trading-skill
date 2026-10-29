@@ -202,5 +202,32 @@ class Secrets(unittest.TestCase):
                 self.assertIsNone(pat.search(fh.read()), os.path.relpath(path, ROOT))
 
 
+class Packaging(unittest.TestCase):
+    def test_every_converted_skill_packages_in_the_layout_claude_wants(self):
+        import importlib.util
+        import tempfile
+        import shutil
+        import zipfile
+        spec = importlib.util.spec_from_file_location("package", os.path.join(ROOT, "tests", "package.py"))
+        pkg = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pkg)
+        d = tempfile.mkdtemp()
+        try:
+            for name in pkg.CONVERTED:
+                self.assertEqual(pkg.check_skill(name), [], name)
+                z = pkg.build(name, d)
+                with zipfile.ZipFile(z) as zf:
+                    names = zf.namelist()
+                self.assertIn(name + "/SKILL.md", names)
+                self.assertTrue(all(n.startswith(name + "/") for n in names), name)
+                self.assertFalse(any("__pycache__" in n or n.endswith(".pyc") for n in names), name)
+            a, b = pkg.build("trader-risk", d), os.path.join(d, "again")
+            with open(a, "rb") as fh:
+                first = fh.read()
+            self.assertEqual(first, open(pkg.build("trader-risk", b), "rb").read())   # repeatable
+        finally:
+            shutil.rmtree(d)
+
+
 if __name__ == "__main__":
     unittest.main()

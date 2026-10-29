@@ -65,8 +65,8 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(HERE), "trader-budget"))
-import charges as chg  # noqa: E402  (the one charges calculator, in trader-budget)
+sys.path.insert(0, HERE)
+import charges as chg  # noqa: E402  (a copy of trader-budget/charges.py; a test keeps the copies identical)
 
 DEFAULTS = {
     "mode": "paper", "kite_enabled": False, "capital_inr": 100000, "max_loss_per_trade_inr": 500,
