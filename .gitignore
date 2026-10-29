@@ -1,0 +1,17 @@
+# Your working folder: trades, state, prices. Notion is the permanent record.
+trader/
+
+# Anything that could hold a secret. Kite keys and access tokens live in
+# environment variables or in config you edit yourself, never in this repo.
+.env
+.env.*
+*.env
+**/kite*.secret*
+**/*access_token*
+**/*api_secret*
+**/*credentials*
+claude_desktop_config.json
+.claude/settings.local.json
+
+__pycache__/
+*.pyc

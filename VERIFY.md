@@ -138,8 +138,8 @@ https://zerodha.com/z-connect/?p=454739.
 | IPFT | not seen on the intraday line | UNVERIFIED |
 
 Worked check at your maximum position (₹75,000 buy and sell): brokerage ₹40,
-STT ₹18.75, NSE ₹4.46, SEBI ₹0.15, stamp ₹2.25, GST ₹8.03: **about ₹73.63 a
-round trip**. All rates go in `trader/config.json` under `charges` with the
+STT ₹18.75, NSE ₹4.46, SEBI ₹0.15, stamp ₹2.25, GST ₹8.03: **about ₹73.64 a
+round trip** (each part kept to the paisa; `trader-budget/charges.py`). All rates go in `trader/config.json` under `charges` with the
 date they were read, so you can fix them in one place.
 
 Sources: https://zerodha.com/charges (via search snippets), https://www.angelone.in/exchange-transaction-charges,
@@ -219,6 +219,18 @@ RSS feeds are plain public files, so trader-news and trader-insider will try
 them; if they fail on your machine, the tools say so and fall back to Yahoo
 headlines only.
 
+## 11. Assumptions made while building (Phase 2, 2026-10-29)
+
+| assumption | where | status |
+| --- | --- | --- |
+| Yahoo's v8 chart JSON for `.NS` has the same shape as for US symbols (meta `symbol`, `regularMarketTime`, `dataGranularity`, `timestamp`, `indicators.quote`) | every data tool | UNVERIFIED for `.NS`: the sandbox could not reach Yahoo. The synthetic fixtures copy the US shape. Run `tests/capture.py RELIANCE` on your machine and the tools against it. |
+| Yahoo's 5-minute bars for NSE start at 09:15 and sit on the 5-minute grid | scanner, entry, time machine | UNVERIFIED |
+| NSE `EQUITY_L.csv` columns `SYMBOL`, `NAME OF COMPANY`, `SERIES`; niftyindices CSV columns `Symbol`, `Series` | scanner universe | from memory, UNVERIFIED; the parser finds columns by name |
+| Treat every stock as a closing-auction stock (continuous trading ends 15:15) | time machine pool, exit flat-by limit | conservative choice: almost all NIFTY 100 stocks have F&O |
+| The live stop is an `SL-M` sell with `market_protection: -1`, placed after the entry fills (config `stop_order_type`, `SL` with a limit 0.5 % below also possible) | trader-budget Kite payload | RECHECK-AT-KITE: whether Zerodha accepts SL-M on NSE equity MIS via the API today |
+| The paper slippage (0.05 % a side) is counted in the ₹500 max loss and the 1.5 reward:risk (`limits_include_slippage: true`) | trader-budget, trader-risk | a design choice, yours to change; see PLAN.md |
+| Yahoo's spark (batch) endpoint is not used for `.NS`: one chart request per symbol | scanner | avoids an unverified endpoint; NIFTY 100 is about 100 requests |
+
 ## Items to re-check when you connect Kite (RECHECK-AT-KITE)
 
 1. Whether the hosted `mcp.kite.trade` exposes `place_order` / `modify_order` / `cancel_order` (assumed: no).
@@ -231,3 +243,5 @@ headlines only.
 8. MIS square-off times (15:12 CAS, 15:25 others) on zerodha.com/marketintel/bulletin.
 9. Every rate in the charges table, against zerodha.com/charges on the day.
 10. Tick size per symbol from Kite's instrument list, against the NSE band table.
+11. Whether `SL-M` (with `market_protection`) is accepted for an NSE equity MIS stop-loss sell; if not, set
+    `"stop_order_type": "SL"` in your config.

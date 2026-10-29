@@ -1,191 +1,225 @@
 #!/usr/bin/env python3
-"""Price alerts and the NYSE clock for trader-alerts. Standard library only.
+"""Price alerts and the NSE clock for trader-alerts. Standard library only.
 
-    python3 alerts.py clock                          # is the NYSE open? next open / close
-    python3 alerts.py quote TSLA --write             # quotes -> trader/prices.json
-    python3 alerts.py quote --holdings --write       # every ticker in your portfolio and plan
-    python3 alerts.py add --from-plan                # stop, target and flat-by-close from trader/plan.json
-    python3 alerts.py add --symbol TSLA --stop 358.32
-    python3 alerts.py add --symbol TSLA --target 370.04
-    python3 alerts.py add --at 15:55 --label "flat by close" --before-close
-    python3 alerts.py add --symbol KO --pct 3
+    python3 alerts.py clock                          # is NSE open? next open / close (India time)
+    python3 alerts.py quote RELIANCE --write         # quotes -> trader/prices.json
+    python3 alerts.py quote --holdings --write       # every symbol in your portfolio and plan
+    python3 alerts.py add --from-plan                # stop, target and flat-by from trader/plan.json
+    python3 alerts.py add --symbol RELIANCE --stop 1402.40
+    python3 alerts.py add --symbol RELIANCE --target 1431.10
+    python3 alerts.py add --at 15:00 --label "flat by" --symbol RELIANCE
+    python3 alerts.py add --symbol TCS --pct 3
     python3 alerts.py add --opening-bell
     python3 alerts.py check                          # rings what hit, once; exit 1 if nothing rang
-    python3 alerts.py check --now "2026-10-19 15:55" --offline tests/fixtures/trader-alerts
+    python3 alerts.py check --now "2026-10-30 15:00" --offline tests/fixtures/nse/alerts
     python3 alerts.py list
-    python3 alerts.py reset tsla-plan-stop
+    python3 alerts.py reset reliance-plan-stop
+
+Symbols are NSE trading symbols (RELIANCE, M&M, BAJAJ-AUTO). Yahoo's symbol is
+the same with ".NS" added; this tool adds it.
 
 Rule types:
   above / target  the price is at or above "price"
   below / stop    the price is at or below "price"
   pct_move        the price moved "pct" percent or more from the previous close
                   (or from "ref" if you give one); "direction": "up" or "down"
-  opening_bell    the NYSE opened today (rings once per trading day)
-  time            the New York clock passed "at" (HH:MM) on a trading day
-                  (rings once per trading day); "before_close": true moves it
-                  3 hours earlier on a 1:00 p.m. early close, so a 15:55
-                  "flat by close" rings at 12:55 on those days
+  opening_bell    NSE opened today (rings once per trading day)
+  time            the India clock passed "at" (HH:MM) on a trading day
+                  (rings once per trading day)
 
-A rule with "date" is only watched on that New York date (rules from a plan
-are for the plan's day only). An above / below alert rings ONCE and then stays
+A rule with "date" is only watched on that India date (rules from a plan are
+for the plan's day only). An above / below alert rings ONCE and then stays
 quiet until you reset it, unless the rule has "rearm": true (it re-arms when
 the price crosses back). A pct_move alert rings at most once per day.
 
-Quotes (free, delayed, unofficial; for alerts only, never for timing an order):
-  yahoo   https://query2.finance.yahoo.com/v8/finance/chart/TSLA (falls back to
-          query1 on a 429 or a 5xx; one retry with a pause on a 429; one
-          request per ticker, half a second apart; the default)
-  stooq   https://stooq.com/q/l/?s=tsla.us&f=sd2t2ohlcv&h&e=csv (Stooq's free
-          CSV; it answered 404 on 2026-10-13, kept for when it is back)
-  --offline DIR reads DIR/<source>-<TICKER>.json|csv (or .json.gz) instead.
+Quotes (free, unofficial; for alerts only, never for timing an order):
+  yahoo   https://query2.finance.yahoo.com/v8/finance/chart/RELIANCE.NS (falls
+          back to query1 on a 429 or a 5xx; one retry with a pause on a 429; one
+          request per symbol, half a second apart)
+  --offline DIR reads DIR/yahoo-<SYMBOL>.json (or .json.gz) instead.
+Yahoo's help page lists NSE as real time (VERIFY.md section 9); check it
+against your broker before you rely on it.
 
-NYSE calendar: the 2026 and 2027 holidays and 1:00 p.m. early closes as
-published at https://www.nyse.com/markets/hours-calendars (read 2026-10-13).
-Outside those years the clock says the holiday list is unknown.
+NSE clock: 09:15 to 15:30 India time, the 2026 holidays, special sessions
+(Muhurat) treated as closed. Stocks in the closing auction stop continuous
+trading at 15:15. Outside 2026 the clock says the holiday list is unknown.
 """
 
 import argparse
-import csv
 import datetime
 import gzip
-import io
 import json
+import math
 import os
 import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
-UA = "Mozilla/5.0 (compatible; day-trader-skill/2.0; +https://github.com/Jakeschincariol/day-trader-skill)"
+UA = "Mozilla/5.0 (compatible; india-day-trader-skill/1.0)"
 PAUSE = 0.5    # seconds between requests: be polite to free endpoints
 BACKOFF = 2.0  # seconds to wait before the one retry after a 429
 YAHOO_HOSTS = ("query2.finance.yahoo.com", "query1.finance.yahoo.com")
 HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
-
-NYSE_HOLIDAYS = {
-    "2026-01-01": "New Year's Day",
-    "2026-01-19": "Martin Luther King, Jr. Day",
-    "2026-02-16": "Washington's Birthday",
-    "2026-04-03": "Good Friday",
-    "2026-05-25": "Memorial Day",
-    "2026-06-19": "Juneteenth National Independence Day",
-    "2026-07-03": "Independence Day (observed)",
-    "2026-09-07": "Labor Day",
-    "2026-11-26": "Thanksgiving Day",
-    "2026-12-25": "Christmas Day",
-    "2027-01-01": "New Year's Day",
-    "2027-01-18": "Martin Luther King, Jr. Day",
-    "2027-02-15": "Washington's Birthday",
-    "2027-03-26": "Good Friday",
-    "2027-05-31": "Memorial Day",
-    "2027-06-18": "Juneteenth National Independence Day (observed)",
-    "2027-07-05": "Independence Day (observed)",
-    "2027-09-06": "Labor Day",
-    "2027-11-25": "Thanksgiving Day",
-    "2027-12-24": "Christmas Day (observed)",
-}
-NYSE_EARLY_CLOSE = {  # 1:00 p.m. ET
-    "2026-11-27": "day after Thanksgiving",
-    "2026-12-24": "Christmas Eve",
-    "2027-11-26": "day after Thanksgiving",
-}
-CALENDAR_YEARS = (2026, 2027)
-OPEN = datetime.time(9, 30)
-CLOSE = datetime.time(16, 0)
-EARLY = datetime.time(13, 0)
+DEFAULT_FLAT_BY = "15:00"
 
 
 class AlertError(Exception):
     pass
 
 
-# ---------------------------------------------------------------- time
+ClockError = AlertError
 
-def _nth_sunday(year, month, n):
-    d = datetime.date(year, month, 1)
-    d += datetime.timedelta(days=(6 - d.weekday()) % 7)
-    return d + datetime.timedelta(weeks=n - 1)
+# ---------------------------------------------------------------- NSE clock (same block in every script)
+# tests/test_repo.py checks that every copy of this block is identical.
+# India Standard Time is UTC+05:30 all year (no daylight saving, no tz files).
+# Holidays: NSE circular NSE/CMTR/71775 (2025-12-12) and public calendars, read
+# 2026-10-29 (VERIFY.md section 3). The 2027 list is not published yet.
+IST = datetime.timedelta(hours=5, minutes=30)
+NSE_HOLIDAYS = {
+    "2026-01-15": "Maharashtra municipal elections (in some lists only)",
+    "2026-01-26": "Republic Day",
+    "2026-03-03": "Holi",
+    "2026-03-26": "Shri Ram Navami",
+    "2026-03-31": "Shri Mahavir Jayanti",
+    "2026-04-03": "Good Friday",
+    "2026-04-14": "Dr. Baba Saheb Ambedkar Jayanti",
+    "2026-05-01": "Maharashtra Day",
+    "2026-05-28": "Bakri Id",
+    "2026-06-26": "Muharram",
+    "2026-09-14": "Ganesh Chaturthi",
+    "2026-10-02": "Mahatma Gandhi Jayanti",
+    "2026-10-20": "Dussehra",
+    "2026-11-10": "Diwali Balipratipada",
+    "2026-11-24": "Prakash Gurpurb Sri Guru Nanak Dev",
+    "2026-12-25": "Christmas",
+}
+NSE_SPECIAL = {"2026-11-08": "Muhurat trading, Diwali"}  # short special sessions: never traded here
+CALENDAR_YEARS = (2026,)
+OPEN = datetime.time(9, 15)
+CLOSE = datetime.time(15, 30)
+CAS_CLOSE = datetime.time(15, 15)  # continuous trading ends here for closing-auction (F&O) stocks
 
 
-def eastern_offset(utc):
-    """Hours from UTC for New York: -4 in daylight time, -5 otherwise.
-    DST runs from 2:00 a.m. on the second Sunday of March to 2:00 a.m. on the
-    first Sunday of November (US rule since 2007)."""
-    y = utc.year
-    start = datetime.datetime.combine(_nth_sunday(y, 3, 2), datetime.time(7, 0))   # 2:00 EST
-    end = datetime.datetime.combine(_nth_sunday(y, 11, 1), datetime.time(6, 0))    # 2:00 EDT
-    naive = utc.replace(tzinfo=None)
-    return -4 if start <= naive < end else -5
+def to_ist(utc):
+    """naive UTC -> naive India time."""
+    return utc.replace(tzinfo=None) + IST
 
 
-def to_eastern(utc):
-    return utc.replace(tzinfo=None) + datetime.timedelta(hours=eastern_offset(utc))
+def ist_to_utc(local):
+    """naive India time -> naive UTC."""
+    return local.replace(tzinfo=None) - IST
 
 
-def eastern_to_utc(local):
-    for off in (-4, -5):
-        utc = local - datetime.timedelta(hours=off)
-        if eastern_offset(utc) == off:
-            return utc
-    return local + datetime.timedelta(hours=5)
+def ts_to_ist(ts):
+    """Unix seconds -> naive India time. Never uses the computer's own time zone."""
+    return datetime.datetime(1970, 1, 1) + datetime.timedelta(seconds=int(ts)) + IST
 
 
 def parse_now(text):
-    """ISO time -> naive UTC. A time without an offset is taken as New York time."""
+    """ISO time -> naive UTC. A time without an offset is India time."""
     if not text:
         return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
-    t = text.strip().replace("Z", "+00:00")
     try:
-        dt = datetime.datetime.fromisoformat(t)
+        dt = datetime.datetime.fromisoformat(str(text).strip().replace("Z", "+00:00"))
     except ValueError:
-        raise AlertError("--now wants a time like \"2026-10-19 10:15\" (New York) or ...Z (UTC)")
+        raise ClockError('--now wants a time like "2026-10-30 10:15" (India time) or ...Z (UTC)')
     if dt.tzinfo is None:
-        return eastern_to_utc(dt)
+        return ist_to_utc(dt)
     return (dt - dt.utcoffset()).replace(tzinfo=None)
 
 
 def trading_day(d):
-    """(is_trading_day, reason). Weekends and the NYSE holiday list."""
+    """(is_trading_day, reason) for an NSE date: weekends, holidays, special sessions, unknown years."""
+    iso = d.isoformat()
+    if iso in NSE_SPECIAL:
+        return False, "special session (%s): not traded by this pack" % NSE_SPECIAL[iso]
     if d.weekday() >= 5:
         return False, "weekend"
-    name = NYSE_HOLIDAYS.get(d.isoformat())
-    if name:
-        return False, "NYSE holiday: " + name
+    if d.year not in CALENDAR_YEARS:
+        return False, ("the NSE holiday list for %d is not in this tool yet: add it from nseindia.com "
+                       "(VERIFY.md section 3)" % d.year)
+    if iso in NSE_HOLIDAYS:
+        return False, "NSE holiday: " + NSE_HOLIDAYS[iso]
     return True, ""
 
 
 def session(d):
-    """(open_time, close_time) in New York time, or None if closed all day."""
-    ok, _ = trading_day(d)
-    if not ok:
-        return None
-    return OPEN, (EARLY if d.isoformat() in NYSE_EARLY_CLOSE else CLOSE)
+    """(open, close) in India time on a trading day, else None."""
+    return (OPEN, CLOSE) if trading_day(d)[0] else None
+
+
+def inr(x, paise=None):
+    """Rupees with Indian digit grouping: 100000 -> "₹1,00,000", 2913.4 -> "₹2,913.40".
+    paise=True always shows paise, False never does, None shows them when not zero."""
+    p = int(round(abs(float(x)) * 100))
+    whole, frac = divmod(p, 100)
+    if paise is False and frac:
+        whole, frac = int(round(abs(float(x)))), 0
+    s = str(whole)
+    if len(s) > 3:
+        head, groups = s[:-3], []
+        while len(head) > 2:
+            groups.insert(0, head[-2:])
+            head = head[:-2]
+        s = ",".join(([head] if head else []) + groups) + "," + s[-3:]
+    if paise is True or (paise is None and frac):
+        s += ".%02d" % frac
+    return ("-" if float(x) < 0 and p else "") + "₹" + s
+
+
+def tick_size(price):
+    """NSE cash-market tick for a price (circular of 2025-03-13, VERIFY.md section 3).
+    Kite's instrument list has each symbol's own tick: pass that instead once connected."""
+    p = float(price)
+    if p < 250:
+        return 0.01
+    for upper, tick in ((1000, 0.05), (5000, 0.10), (10000, 0.50), (20000, 1.00)):
+        if p <= upper:
+            return tick
+    return 5.00
+
+
+def to_tick(price, tick, way="nearest"):
+    """A price on the tick grid, in whole paise: way "down", "up" or "nearest" (half up)."""
+    t = int(round(float(tick) * 100))
+    p = float(price) * 100
+    if way == "down":
+        n = math.floor(p / t + 1e-9)
+    elif way == "up":
+        n = math.ceil(p / t - 1e-9)
+    else:
+        n = math.floor(p / t + 0.5 + 1e-9)
+    return round(n * t / 100.0, 2)
+# ---------------------------------------------------------------- end NSE clock
 
 
 def market_status(now_utc):
-    local = to_eastern(now_utc)
+    local = to_ist(now_utc)
     d = local.date()
     ok, reason = trading_day(d)
-    st = {"now_new_york": local.strftime("%Y-%m-%d %H:%M"), "date": d.isoformat(),
+    st = {"now_india": local.strftime("%Y-%m-%d %H:%M"), "date": d.isoformat(),
           "weekday": local.strftime("%A"), "calendar_known": d.year in CALENDAR_YEARS,
-          "open": False, "reason": reason, "early_close": NYSE_EARLY_CLOSE.get(d.isoformat())}
+          "open": False, "reason": reason, "cas_close": CAS_CLOSE.strftime("%H:%M")}
     s = session(d)
     if s:
         o, c = s
         st["opens"], st["closes"] = o.strftime("%H:%M"), c.strftime("%H:%M")
         if o <= local.time() < c:
             st["open"] = True
-            st["reason"] = "regular session"
+            st["reason"] = "normal market"
+            if local.time() >= CAS_CLOSE:
+                st["reason"] = "normal market; closing-auction stocks stopped continuous trading at 15:15"
         elif local.time() < o:
             st["reason"] = "before the open"
         else:
             st["reason"] = "after the close"
-    # next open
     nd = d if (s and local.time() < s[0]) else d + datetime.timedelta(days=1)
     for _ in range(15):
         if session(nd):
-            st["next_open"] = "%s 09:30" % nd.isoformat()
+            st["next_open"] = "%s %s" % (nd.isoformat(), OPEN.strftime("%H:%M"))
             break
         nd += datetime.timedelta(days=1)
     return st
@@ -193,33 +227,14 @@ def market_status(now_utc):
 
 # ---------------------------------------------------------------- quotes
 
-def stooq_url(sym):
-    return "https://stooq.com/q/l/?s=%s.us&f=sd2t2ohlcv&h&e=csv" % sym.lower().replace(".", "-")
+def yahoo_symbol(sym):
+    """RELIANCE -> RELIANCE.NS (already .NS or .BO: left alone)."""
+    s = sym.strip().upper()
+    return s if s.endswith((".NS", ".BO")) else s + ".NS"
 
 
 def yahoo_url(sym, host=YAHOO_HOSTS[0]):
-    return "https://%s/v8/finance/chart/%s?range=1d&interval=1d" % (host, sym.upper().replace(".", "-"))
-
-
-def parse_stooq(text, sym):
-    """Symbol,Date,Time,Open,High,Low,Close,Volume -> quote. N/D means no data."""
-    rows = list(csv.DictReader(io.StringIO(text.strip())))
-    if not rows:
-        raise AlertError("Stooq returned no rows for %s" % sym)
-    r = {k.strip().lower(): (v or "").strip() for k, v in rows[0].items() if k}
-    close = r.get("close", "")
-    if not close or close.upper() == "N/D":
-        raise AlertError("Stooq has no data for %s (check the ticker)" % sym)
-
-    def f(k):
-        v = r.get(k, "")
-        try:
-            return float(v)
-        except ValueError:
-            return None
-    return {"symbol": sym.upper(), "price": float(close), "open": f("open"), "high": f("high"),
-            "low": f("low"), "prev_close": None, "time": ("%s %s" % (r.get("date", ""), r.get("time", ""))).strip(),
-            "source": "stooq"}
+    return "https://%s/v8/finance/chart/%s?range=1d&interval=1d" % (host, urllib.parse.quote(yahoo_symbol(sym)))
 
 
 def parse_yahoo(text, sym):
@@ -230,7 +245,7 @@ def parse_yahoo(text, sym):
         raise AlertError("Yahoo returned something unexpected for %s" % sym)
     if not res:
         err = (data.get("chart") or {}).get("error") or {}
-        raise AlertError("Yahoo has no data for %s: %s" % (sym, err.get("description", "unknown ticker")))
+        raise AlertError("Yahoo has no data for %s: %s" % (sym, err.get("description", "unknown symbol")))
     m = res[0].get("meta", {})
     price = m.get("regularMarketPrice")
     if price is None:
@@ -271,13 +286,6 @@ def _get(url, timeout=20):
         raise AlertError("could not reach %s: %s" % (url.split("/")[2], e.reason))
 
 
-def fetch(url, timeout=20):
-    code, text = _get(url, timeout)
-    if code != 200:
-        raise AlertError("%s answered HTTP %d" % (url.split("?")[0], code))
-    return text
-
-
 def fetch_yahoo(sym, timeout=20):
     """query2 first. A 429 waits BACKOFF seconds and tries once more; a 429 or a 5xx
     after that moves on to query1. A 404 comes back as Yahoo's own error JSON."""
@@ -298,9 +306,8 @@ def fetch_yahoo(sym, timeout=20):
     raise AlertError("%s answered HTTP %d" % (last[0].split("?")[0], last[1]))
 
 
-def _offline_text(folder, source, sym):
-    ext = "csv" if source == "stooq" else "json"
-    base = os.path.join(folder, "%s-%s.%s" % (source, sym, ext))
+def _offline_text(folder, sym):
+    base = os.path.join(folder, "yahoo-%s.json" % sym)
     if os.path.exists(base):
         with open(base, encoding="utf-8") as fh:
             return fh.read()
@@ -310,25 +317,25 @@ def _offline_text(folder, source, sym):
     raise AlertError("no offline quote file %s" % base)
 
 
-def get_quotes(symbols, source="yahoo", offline=None, pause=PAUSE):
-    """{SYM: quote} and [errors]. One request per ticker, with a pause between."""
+def get_quotes(symbols, offline=None, pause=PAUSE):
+    """{SYM: quote} and [errors]. One request per symbol, with a pause between."""
     quotes, errors = {}, []
     for i, sym in enumerate(symbols):
         sym = sym.upper()
         try:
             if offline:
-                text = _offline_text(offline, source, sym)
+                text = _offline_text(offline, sym)
             else:
                 if i and pause:
                     _sleep(pause)
-                text = fetch(stooq_url(sym)) if source == "stooq" else fetch_yahoo(sym)
-            quotes[sym] = parse_stooq(text, sym) if source == "stooq" else parse_yahoo(text, sym)
+                text = fetch_yahoo(sym)
+            quotes[sym] = parse_yahoo(text, sym)
         except AlertError as e:
             errors.append(str(e))
     return quotes, errors
 
 
-def write_prices(path, quotes, now_utc, source):
+def write_prices(path, quotes, now_utc):
     old = {}
     if os.path.exists(path):
         try:
@@ -343,9 +350,9 @@ def write_prices(path, quotes, now_utc, source):
         prices[s] = q["price"]
         detail[s] = {"prev_close": q.get("prev_close"), "time": q.get("time"), "source": q.get("source"),
                      "fetched": stamp}
-    doc = {"as_of": stamp, "source": source,
-           "note": ("Delayed quotes for alerts and sizing checks. Your broker's price is the one that fills. "
-                    "detail.fetched is when each price was read."),
+    doc = {"as_of": stamp, "source": "yahoo",
+           "note": ("Free unofficial quotes for alerts and sizing checks. Your broker's price is the one that "
+                    "fills. detail.fetched is when each price was read."),
            "prices": prices, "detail": detail}
     _write(path, doc)
     return doc
@@ -357,7 +364,7 @@ def _write(path, doc):
         os.makedirs(d, exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(doc, fh, indent=2)
+        json.dump(doc, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
     os.replace(tmp, path)
 
@@ -396,33 +403,25 @@ def validate(rule):
     if t == "pct_move" and not isinstance(rule.get("pct"), (int, float)):
         raise AlertError("rule %s needs a numeric pct" % rule.get("id"))
     if t == "time" and _hhmm(rule.get("at")) is None:
-        raise AlertError("rule %s needs \"at\" as a New York time like \"15:55\"" % rule.get("id"))
+        raise AlertError("rule %s needs \"at\" as an India time like \"15:00\"" % rule.get("id"))
     if rule.get("date") and not re.match(r"^\d{4}-\d{2}-\d{2}$", str(rule["date"])):
         raise AlertError("rule %s: date must be YYYY-MM-DD" % rule.get("id"))
 
 
 def active(rule, today):
-    """A rule with a "date" is watched on that New York date only."""
+    """A rule with a "date" is watched on that India date only."""
     return not rule.get("date") or str(rule["date"]) == today
 
 
 def _rang_today(stamp, today):
-    """Did a rule that rang at this UTC stamp ring on this New York date?"""
+    """Did a rule that rang at this UTC stamp ring on this India date?"""
     if not stamp:
         return False
     try:
         utc = datetime.datetime.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")
     except ValueError:
         return stamp[:10] == today
-    return to_eastern(utc).date().isoformat() == today
-
-
-def ring_time(rule, status):
-    """The time a time rule rings today, moved 3 hours earlier on an early close if "before_close"."""
-    at = _hhmm(rule.get("at"))
-    if rule.get("before_close") and status.get("early_close"):
-        at = (datetime.datetime.combine(datetime.date(2000, 1, 1), at) - datetime.timedelta(hours=3)).time()
-    return at
+    return to_ist(utc).date().isoformat() == today
 
 
 def evaluate(rules, quotes, status, state, now_utc):
@@ -430,7 +429,7 @@ def evaluate(rules, quotes, status, state, now_utc):
     state = json.loads(json.dumps(state or {}))
     rung = state.setdefault("rung", {})
     today = status["date"]
-    local = to_eastern(now_utc)
+    local = to_ist(now_utc)
     stamp = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     rings = []
     for r in rules:
@@ -441,23 +440,22 @@ def evaluate(rules, quotes, status, state, now_utc):
         typ = {"stop": "below", "target": "above"}.get(r["type"], r["type"])
         if typ == "opening_bell":
             if status["open"] and not _rang_today(rung.get(rid), today):
-                rings.append({"id": rid, "symbol": "", "message": "Opening bell: the NYSE is open (%s New York)%s."
-                              % (status["now_new_york"], (", early close at 1:00 p.m. today, "
-                                                          + status["early_close"]) if status.get("early_close") else "")})
+                rings.append({"id": rid, "symbol": "", "message": "Opening bell: NSE is open (%s India time)."
+                              % status["now_india"]})
                 rung[rid] = stamp
             continue
         if typ == "time":
-            at = ring_time(r, status)
+            at = _hhmm(r.get("at"))
             if status.get("opens") and local.time() >= at and not _rang_today(rung.get(rid), today):
                 label = r.get("label") or "time alert"
-                msg = "%s%s: it is %s New York (set for %s)" % (label[:1].upper(), label[1:],
-                                                                 local.strftime("%H:%M"), at.strftime("%H:%M"))
+                msg = "%s%s: it is %s India time (set for %s)" % (label[:1].upper(), label[1:],
+                                                                   local.strftime("%H:%M"), at.strftime("%H:%M"))
                 msg += (", the market closes at %s." % status["closes"]) if status["open"] else \
                     ", the market has closed."
                 sym = str(r.get("symbol") or "").upper()
                 if sym:
-                    msg += (" If %s is still open, close it: trader-broker flatten --symbol %s builds the sell "
-                            "ticket, then trader-risk and your yes." % (sym, sym))
+                    msg += (" If %s is still open, close it now with trader-broker: your yes first, "
+                            "one order at a time." % sym)
                 rings.append({"id": rid, "symbol": sym, "message": msg})
                 rung[rid] = stamp
             continue
@@ -471,9 +469,9 @@ def evaluate(rules, quotes, status, state, now_utc):
             if hit and rid not in rung:
                 word = "at or above" if typ == "above" else "at or below"
                 label = {"stop": "stop", "target": "target"}.get(r["type"], "alert level")
-                rings.append({"id": rid, "symbol": sym, "message": "%s %s $%.2f: %s your %s $%s%s."
-                              % (sym, "is" if status["open"] else "last", p, word, label, _n(r["price"]),
-                                 (" (" + r["note"] + ")") if r.get("note") else "")})
+                rings.append({"id": rid, "symbol": sym, "message": "%s %s %s: %s your %s %s%s."
+                              % (sym, "is" if status["open"] else "last", inr(p, True), word, label,
+                                 inr(r["price"], True), (" (" + r["note"] + ")") if r.get("note") else "")})
                 rung[rid] = stamp
             elif not hit and rid in rung and r.get("rearm"):
                 del rung[rid]
@@ -485,8 +483,8 @@ def evaluate(rules, quotes, status, state, now_utc):
             want = r.get("direction")
             hit = abs(move) >= r["pct"] and (not want or (want == "up") == (move > 0))
             if hit and not _rang_today(rung.get(rid), today):
-                rings.append({"id": rid, "symbol": sym, "message": "%s moved %+.2f%% to $%.2f (from $%.2f)."
-                              % (sym, move, p, float(ref))})
+                rings.append({"id": rid, "symbol": sym, "message": "%s moved %+.2f%% to %s (from %s)."
+                              % (sym, move, inr(p, True), inr(float(ref), True))})
                 rung[rid] = stamp
     state["last_check"] = stamp
     return rings, state
@@ -498,7 +496,7 @@ def _n(x):
 
 
 def rules_from_plan(plan, cfg_flat_by=None):
-    """trader/plan.json -> a stop alert, a target alert and a flat-by-close time alert, for the plan's day."""
+    """trader/plan.json -> a stop alert, a target alert and a flat-by time alert, for the plan's day."""
     if not isinstance(plan, dict) or not plan.get("symbol"):
         raise AlertError("the plan has no symbol (run trader-exit first)")
     sym = str(plan["symbol"]).upper()
@@ -510,11 +508,11 @@ def rules_from_plan(plan, cfg_flat_by=None):
         label = plan.get("%s_label" % key)
         out.append({"id": "%s-plan-%s" % (sym.lower(), key), "symbol": sym, "type": typ, "price": float(v),
                     "note": word + (": " + label if label else "")})
-    flat = plan.get("flat_by") or cfg_flat_by or "15:55"
+    flat = plan.get("flat_by") or cfg_flat_by or DEFAULT_FLAT_BY
     if _hhmm(flat) is None:
-        raise AlertError("the plan's flat_by %r is not a time like 15:55" % flat)
+        raise AlertError("the plan's flat_by %r is not a time like 15:00" % flat)
     out.append({"id": "%s-flat-by" % sym.lower(), "symbol": sym, "type": "time", "at": flat,
-                "label": "flat by close", "before_close": True})
+                "label": "flat by %s" % flat})
     if plan.get("date"):
         for r in out:
             r["date"] = str(plan["date"])
@@ -547,41 +545,43 @@ def cmd_clock(a):
     if a.json:
         print(json.dumps(st, indent=2))
     else:
-        print("New York %s (%s): NYSE %s, %s." % (st["now_new_york"], st["weekday"],
-                                                  "OPEN" if st["open"] else "closed", st["reason"]))
+        print("India %s (%s): NSE %s, %s." % (st["now_india"], st["weekday"],
+                                              "OPEN" if st["open"] else "closed", st["reason"]))
         if st.get("opens"):
-            print("Today's session: %s to %s%s." % (st["opens"], st["closes"],
-                                                    (" (early close: %s)" % st["early_close"]) if st.get("early_close") else ""))
+            print("Today's session: %s to %s (closing-auction stocks: continuous trading to %s)."
+                  % (st["opens"], st["closes"], st["cas_close"]))
         if not st["open"] and st.get("next_open"):
-            print("Next open: %s New York." % st["next_open"])
+            print("Next open: %s India time." % st["next_open"])
         if not st["calendar_known"]:
-            print("Holiday list covers %s only: check nyse.com for this date." % " and ".join(map(str, CALENDAR_YEARS)))
+            print("The holiday list covers %s only: check nseindia.com for this date."
+                  % " and ".join(map(str, CALENDAR_YEARS)))
     return 0 if st["open"] else 1
 
 
 def cmd_quote(a):
     syms = _dedupe([s.upper() for s in a.symbols] + (holdings(a) if a.holdings else []))
     if not syms:
-        raise AlertError("which tickers? alerts.py quote TSLA KO, or --holdings")
+        raise AlertError("which symbols? alerts.py quote RELIANCE TCS, or --holdings")
     now = parse_now(a.now)
-    quotes, errors = get_quotes(syms, a.source, a.offline)
+    quotes, errors = get_quotes(syms, a.offline)
     if a.write and quotes:
-        write_prices(a.write, quotes, now, a.source)
+        write_prices(a.write, quotes, now)
     if a.json:
-        print(json.dumps({"quotes": quotes, "errors": errors}, indent=2))
+        print(json.dumps({"quotes": quotes, "errors": errors}, indent=2, ensure_ascii=False))
     else:
         for s in syms:
             q = quotes.get(s)
             if q:
                 chg = ""
                 if q.get("prev_close"):
-                    chg = " (%+.2f%% vs prev close $%.2f)" % (100.0 * (q["price"] / q["prev_close"] - 1), q["prev_close"])
-                print("%-6s $%.2f%s  %s  [%s]" % (s, q["price"], chg, q.get("time", ""), q["source"]))
+                    chg = " (%+.2f%% vs prev close %s)" % (100.0 * (q["price"] / q["prev_close"] - 1),
+                                                           inr(q["prev_close"], True))
+                print("%-12s %s%s  %s  [%s]" % (s, inr(q["price"], True), chg, q.get("time", ""), q["source"]))
         for e in errors:
             print("error: " + e)
         if a.write and quotes:
             print("Wrote %d price(s) to %s." % (len(quotes), a.write))
-        print("Quotes are free, delayed and unofficial: for alerts only. Your broker's price is the one that fills.")
+        print("Quotes are free and unofficial: for alerts only. Your broker's price is the one that fills.")
     return 0 if quotes else 1
 
 
@@ -594,31 +594,30 @@ def cmd_check(a):
     status = market_status(now)
     watched = [r for r in rules if active(r, status["date"])]
     syms = _dedupe([str(r.get("symbol", "")).upper() for r in watched if r.get("type") not in NO_QUOTE])
-    quotes, errors = (get_quotes(syms, a.source, a.offline) if syms else ({}, []))
+    quotes, errors = (get_quotes(syms, a.offline) if syms else ({}, []))
     state = _read(a.state, {})
     rings, state = evaluate(rules, quotes, status, state, now)
     if not a.no_write:
         _write(a.state, state)
         if quotes:
-            write_prices(a.prices_out, quotes, now, a.source)
+            write_prices(a.prices_out, quotes, now)
     if a.json:
         print(json.dumps({"market": status, "rings": rings, "errors": errors,
-                          "quotes": {s: q["price"] for s, q in quotes.items()}}, indent=2))
+                          "quotes": {s: q["price"] for s, q in quotes.items()}}, indent=2, ensure_ascii=False))
     else:
-        print("NYSE %s (%s New York, %s)." % ("OPEN" if status["open"] else "closed", status["now_new_york"],
+        print("NSE %s (%s India time, %s)." % ("OPEN" if status["open"] else "closed", status["now_india"],
                                               status["reason"]))
         for r in rings:
             print("ALERT " + r["message"])
         if not rings:
             print("Nothing hit. %d rule(s) watched today%s." % (
-                len(watched), (", " + ", ".join("%s $%.2f" % (s, quotes[s]["price"]) for s in syms if s in quotes))
-                if quotes else ""))
+                len(watched), (", " + ", ".join("%s %s" % (s, inr(quotes[s]["price"], True)) for s in syms
+                                                if s in quotes)) if quotes else ""))
         for e in errors:
             print("error: " + e)
         if rings:
-            print("An alert is information, not an order. A bracket's stop-loss and take-profit already sit at "
-                  "the broker: check get_open_position and record any fill (ticket.py fill). To close a "
-                  "position yourself: ticket.py flatten, then trader-risk and your yes.")
+            print("An alert is information, not an order. Only the stop rests at the broker (live mode); "
+                  "the target and the flat-by exit are new orders that need trader-risk and your yes.")
     return 0 if rings else 1
 
 
@@ -642,19 +641,17 @@ def cmd_add(a):
         for r in new:
             print("Added %s: %s" % (r["id"], json.dumps(r)))
         print("Run alerts.py check every few minutes while the trade is open (a scheduled task or /loop). "
-              "Free quotes are delayed; the broker's bracket orders are what actually stop you out.")
+              "A check reads the latest quote; a price can pass a level between two checks.")
         return 0
     if a.opening_bell:
         rule = {"id": a.id or "opening-bell", "type": "opening_bell"}
     elif a.at:
         if _hhmm(a.at) is None:
-            raise AlertError("--at wants a New York time like 15:55")
+            raise AlertError("--at wants an India time like 15:00")
         rule = {"id": a.id or ("time-%s" % a.at.replace(":", "")), "type": "time", "at": a.at,
                 "label": a.label or "time alert"}
         if a.symbol:
             rule["symbol"] = a.symbol.upper()
-        if a.before_close:
-            rule["before_close"] = True
     else:
         if not a.symbol:
             raise AlertError("--symbol is required (or --from-plan, --at, --opening-bell)")
@@ -716,22 +713,21 @@ def cmd_reset(a):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Price alerts and the NYSE clock (trader-alerts).")
+    ap = argparse.ArgumentParser(description="Price alerts and the NSE clock (trader-alerts).")
     sub = ap.add_subparsers(dest="cmd")
 
     def net(p):
-        p.add_argument("--source", default="yahoo", choices=["yahoo", "stooq"])
-        p.add_argument("--offline", metavar="DIR", help="read <source>-<TICKER>.json|csv files, no network")
-        p.add_argument("--now", help="pretend it is this time (no offset = New York time)")
+        p.add_argument("--offline", metavar="DIR", help="read yahoo-<SYMBOL>.json files, no network")
+        p.add_argument("--now", help="pretend it is this time (no offset = India time)")
         p.add_argument("--json", action="store_true")
 
-    p = sub.add_parser("clock", help="is the NYSE open?")
+    p = sub.add_parser("clock", help="is NSE open?")
     p.add_argument("--now")
     p.add_argument("--json", action="store_true")
-    p = sub.add_parser("quote", help="latest delayed quotes")
+    p = sub.add_parser("quote", help="latest quotes")
     net(p)
     p.add_argument("symbols", nargs="*")
-    p.add_argument("--holdings", action="store_true", help="add tickers from your portfolio and plan")
+    p.add_argument("--holdings", action="store_true", help="add symbols from your portfolio and plan")
     p.add_argument("--portfolio", default="trader/portfolio.json")
     p.add_argument("--plan", default="trader/plan.json")
     p.add_argument("--write", nargs="?", const="trader/prices.json", metavar="PATH",
@@ -753,14 +749,12 @@ def main(argv=None):
     g.add_argument("--target", type=float)
     g.add_argument("--pct", type=float)
     g.add_argument("--opening-bell", action="store_true")
-    g.add_argument("--at", metavar="HH:MM", help="a time alert, New York time")
-    g.add_argument("--from-plan", action="store_true", help="stop, target and flat-by-close from the plan")
+    g.add_argument("--at", metavar="HH:MM", help="a time alert, India time")
+    g.add_argument("--from-plan", action="store_true", help="stop, target and flat-by from the plan")
     p.add_argument("--plan", default="trader/plan.json")
     p.add_argument("--config", default="trader/config.json", help="flat_by when the plan has none")
-    p.add_argument("--label", help="what a time alert says, e.g. \"flat by close\"")
-    p.add_argument("--before-close", action="store_true",
-                   help="a time alert that moves 3 hours earlier on a 1:00 p.m. early close")
-    p.add_argument("--date", help="watch this rule on this New York date only (YYYY-MM-DD)")
+    p.add_argument("--label", help="what a time alert says, e.g. \"flat by\"")
+    p.add_argument("--date", help="watch this rule on this India date only (YYYY-MM-DD)")
     p.add_argument("--direction", choices=["up", "down"])
     p.add_argument("--rearm", action="store_true")
     p.add_argument("--note")

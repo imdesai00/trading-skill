@@ -1,176 +1,217 @@
 #!/usr/bin/env python3
-"""Pre-trade risk check for trader-risk. Standard library only, no network.
+"""Pre-trade risk check for trader-risk (NSE intraday). Standard library only, no network.
 
 Reads the proposed orders (trader/orders.json) and checks every one against
-your rules (trader/config.json), your account (trader/portfolio.json),
-prices (trader/prices.json) and what was placed today (trader/state/broker.json).
-Each order gets PASS or BLOCK with the reasons. Orders are checked in file
-order as if each PASS had filled, so buys that are fine one by one but break
-a limit together are caught.
+your limits (trader/config.json), the account ledger of the current mode
+(paper: trader/state/paper.json, live: trader/state/live.json), fresh prices
+(trader/prices.json) and, in live mode, the Kite connection check
+(trader/state/kite.json). Each order gets PASS or BLOCK with plain reasons.
+Orders are checked in file order as if each PASS had filled.
 
     python3 check.py                                 # the trader/ files, writes trader/state/risk.json
-    python3 check.py --now "2026-10-19 10:15"        # pin the clock (New York time)
-    python3 check.py --orders trader/orders.json --json
+    python3 check.py --now "2026-10-30 09:51"        # pin the clock (India time)
+    python3 check.py --json
     python3 check.py --no-write                      # check without recording the verdicts
 
-Entries and exits. An ENTRY opens or adds to a position (a buy, or a sell
-that would go short). An EXIT only reduces what you hold. Getting out must
-always be possible: an exit is checked for format, asset and short sales
-only; every other rule turns into a warning for it.
+ENTRY or EXIT. An entry opens a position (a buy; a sell of shares you do not
+hold would be a short). An exit only sells what you hold. Getting out must
+always be possible: an exit is checked for format and short selling only;
+every other rule turns into a warning for it.
 
-What blocks an order (every order):
-
-  format        missing symbol or side, both or neither of qty / notional,
-                notional on anything but a market day order (Alpaca's rule),
-                a limit order without a limit price, unknown type; a bracket
-                that is not whole shares, not day / gtc, or misses a leg
-  asset         options (OCC symbols) unless "allow_options": true; crypto
-                and anything that is not a stock or ETF
-  short         selling more than you hold, unless "allow_short": true
+What blocks any order:
+  format     symbol, side buy/sell, a whole-share qty, exchange NSE, product MIS,
+             entry_type market or limit (a limit needs a limit_price)
+  short      selling more than you hold ("allow_short" is false)
+  mode       "mode": "live" without "kite_enabled": true, or without a Kite check
+             from today (trader/state/kite.json, written by trader-broker kite.py)
 
 What blocks an entry (on top):
+  pause      the account is ₹8,000 or more below capital (max_drawdown_pause_inr):
+             all trading stops until you review it
+  daily      today's realised loss + the risk still open + this trade's loss at
+             the stop would pass max_daily_loss_inr (₹1,500), or already has
+  weekly     the same for the week from Monday (max_weekly_loss_inr, ₹4,000):
+             no new entries until next Monday
+  trades     max_trades_per_day (3) entries already today
+  open       max_open_positions (1) already open
+  stop       no stop, or a stop not below the entry
+  loss       the loss at the stop, slippage and charges included, over
+             max_loss_per_trade_inr (₹500)
+  reward     reward:risk after charges under min_reward_risk (1.5)
+  charges    charges over max_charges_pct_of_target (25 %) of the gross profit at the target
+  position   order value over max_position_value_inr (₹75,000)
+  cash       the buy would dip into the cash buffer, or need margin (leverage is off)
+  window     before no_entries_before (09:30) or after no_entries_after (14:45)
+             India time, or NSE is closed (weekend, holiday, special session,
+             a year without a holiday list)
+  blocked    a symbol on your "blocked" list
+  duplicate  the same symbol and side twice in this batch
 
-  blocked       a ticker on your "blocked" list
-  size          under min_order_usd, over max_order_usd
-  position      the stock would be over max_position_pct of the account
-  cash          the buy would dip into your cash buffer, or need margin
-  duplicate     the same symbol and side twice in this batch, or already
-                placed today (trader/state/broker.json)
-  daily limit   max_orders_per_day orders placed today
-  stop          no stop while "require_stop": true (a bracket stop_loss_stop_price
-                or the order's plan stop); a stop on the wrong side of the entry
-  loss          qty x (entry - stop) over max_loss_per_trade_usd. The entry is
-                the limit price for a limit order, else the HIGHER of the plan's
-                entry and a fresh price (under 15 minutes old), so a stale plan
-                cannot understate the risk
-  reward:risk   (target - entry) / (entry - stop) under min_reward_risk
-  daily loss    the max losses at the stops of today's entries plus this one
-                over max_daily_loss_usd (win or lose, each counts in full)
-  trades        max_trades_per_day entries already placed today
-  window        before no_entries_before or after no_entries_after (New York
-                time), or the market is closed (weekend, NYSE holiday, outside
-                9:30 to the close; on a 1:00 p.m. early close the window ends
-                3 hours earlier too)
-  pdt           only with "pdt_guard": true: 3 day trades already in the last
-                5 business days (a 4th would trip the old pattern-day-trader rule)
+The entry it measures from: the limit price for a limit order, else the HIGHER
+of the plan's entry and a fresh price (under 15 minutes old).
 
-Exit code 0 when every order passes, 1 when any order is blocked.
-The verdicts go to trader/state/risk.json with a fingerprint of each order,
-so trader-broker only shows an order as ready if THIS exact order passed today.
+Exit code 0 when every order passes, 1 when any order is blocked. The verdicts
+go to trader/state/risk.json with a fingerprint of each exact order, so
+trader-broker only shows an order as ready if THIS exact order passed today.
 """
 
 import argparse
 import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import sys
 
-DEFAULTS = {
-    "budget": None, "cash_buffer_pct": 10, "max_position_pct": 75, "max_order_usd": 4000,
-    "min_order_usd": 5, "max_loss_per_trade_usd": 50, "max_daily_loss_usd": 150, "max_trades_per_day": 3,
-    "max_orders_per_day": 10, "min_reward_risk": 1.0, "require_stop": True,
-    "no_entries_before": "09:45", "no_entries_after": "15:30", "flat_by": "15:55",
-    "paper": True, "blocked": [], "allow_options": False, "allow_margin": False, "allow_short": False,
-    "pdt_guard": False,
-}
-ALPACA_FIELDS = ("symbol", "side", "qty", "notional", "type", "time_in_force", "limit_price",
-                 "stop_price", "trail_price", "trail_percent", "extended_hours", "client_order_id",
-                 "order_class", "take_profit_limit_price", "stop_loss_stop_price",
-                 "stop_loss_limit_price", "advanced_instructions")
-PRICE_FIELDS = ("qty", "notional", "limit_price", "stop_price", "take_profit_limit_price",
-                "stop_loss_stop_price", "stop_loss_limit_price")
-TYPES = {"market", "limit", "stop", "stop_limit", "trailing_stop"}
-TIFS = {"day", "gtc", "opg", "cls", "ioc", "fok"}
-OCC = re.compile(r"^[A-Z]{1,6}\d{6}[CP]\d{8}$")
-TICKER = re.compile(r"^[A-Z]{1,5}([.\-][A-Z]{1,2})?$")
-HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
-CENT = 0.005
-FRESH_MINUTES = 15
-REF_WORDS = {"plan": "the plan's entry", "price": "the latest price", "limit": "the limit price",
-             "stop price": "the stop price", "stale price": "an old price"}
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "trader-budget"))
+import charges as chg  # noqa: E402  (the one charges calculator, in trader-budget)
 
-NYSE_HOLIDAYS = {
-    "2026-01-01": "New Year's Day",
-    "2026-01-19": "Martin Luther King, Jr. Day",
-    "2026-02-16": "Washington's Birthday",
-    "2026-04-03": "Good Friday",
-    "2026-05-25": "Memorial Day",
-    "2026-06-19": "Juneteenth National Independence Day",
-    "2026-07-03": "Independence Day (observed)",
-    "2026-09-07": "Labor Day",
-    "2026-11-26": "Thanksgiving Day",
-    "2026-12-25": "Christmas Day",
-    "2027-01-01": "New Year's Day",
-    "2027-01-18": "Martin Luther King, Jr. Day",
-    "2027-02-15": "Washington's Birthday",
-    "2027-03-26": "Good Friday",
-    "2027-05-31": "Memorial Day",
-    "2027-06-18": "Juneteenth National Independence Day (observed)",
-    "2027-07-05": "Independence Day (observed)",
-    "2027-09-06": "Labor Day",
-    "2027-11-25": "Thanksgiving Day",
-    "2027-12-24": "Christmas Day (observed)",
+DEFAULTS = {
+    "mode": "paper", "kite_enabled": False, "capital_inr": 100000, "max_loss_per_trade_inr": 500,
+    "max_daily_loss_inr": 1500, "max_weekly_loss_inr": 4000, "max_drawdown_pause_inr": 8000,
+    "max_trades_per_day": 3, "max_open_positions": 1, "max_position_value_inr": 75000, "cash_buffer_pct": 10,
+    "min_reward_risk": 1.5, "max_charges_pct_of_target": 25, "allow_margin": False, "allow_short": False,
+    "require_stop": True, "no_entries_before": "09:30", "no_entries_after": "14:45", "flat_by": "15:00",
+    "paper_slippage_pct": 0.05, "limits_include_slippage": True, "blocked": [],
 }
-NYSE_EARLY_CLOSE = {  # 1:00 p.m. ET
-    "2026-11-27": "day after Thanksgiving",
-    "2026-12-24": "Christmas Eve",
-    "2027-11-26": "day after Thanksgiving",
-}
-CALENDAR_YEARS = (2026, 2027)
-OPEN = datetime.time(9, 30)
-CLOSE = datetime.time(16, 0)
-EARLY = datetime.time(13, 0)
+NEUTRAL_FIELDS = ("symbol", "exchange", "side", "qty", "product", "entry_type", "limit_price", "stop", "target")
+SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9&\-]{0,19}$")
+HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+EPS = 1e-9
+FRESH_MINUTES = 15
+REF_WORDS = {"plan": "the plan's entry", "price": "the latest price", "limit": "the limit price"}
 
 
 class RiskError(Exception):
     pass
 
 
-# ---------------------------------------------------------------- time (New York, no tz files)
+ClockError = RiskError
 
-def _nth_sunday(year, month, n):
-    d = datetime.date(year, month, 1)
-    d += datetime.timedelta(days=(6 - d.weekday()) % 7)
-    return d + datetime.timedelta(weeks=n - 1)
+# ---------------------------------------------------------------- NSE clock (same block in every script)
+# tests/test_repo.py checks that every copy of this block is identical.
+# India Standard Time is UTC+05:30 all year (no daylight saving, no tz files).
+# Holidays: NSE circular NSE/CMTR/71775 (2025-12-12) and public calendars, read
+# 2026-10-29 (VERIFY.md section 3). The 2027 list is not published yet.
+IST = datetime.timedelta(hours=5, minutes=30)
+NSE_HOLIDAYS = {
+    "2026-01-15": "Maharashtra municipal elections (in some lists only)",
+    "2026-01-26": "Republic Day",
+    "2026-03-03": "Holi",
+    "2026-03-26": "Shri Ram Navami",
+    "2026-03-31": "Shri Mahavir Jayanti",
+    "2026-04-03": "Good Friday",
+    "2026-04-14": "Dr. Baba Saheb Ambedkar Jayanti",
+    "2026-05-01": "Maharashtra Day",
+    "2026-05-28": "Bakri Id",
+    "2026-06-26": "Muharram",
+    "2026-09-14": "Ganesh Chaturthi",
+    "2026-10-02": "Mahatma Gandhi Jayanti",
+    "2026-10-20": "Dussehra",
+    "2026-11-10": "Diwali Balipratipada",
+    "2026-11-24": "Prakash Gurpurb Sri Guru Nanak Dev",
+    "2026-12-25": "Christmas",
+}
+NSE_SPECIAL = {"2026-11-08": "Muhurat trading, Diwali"}  # short special sessions: never traded here
+CALENDAR_YEARS = (2026,)
+OPEN = datetime.time(9, 15)
+CLOSE = datetime.time(15, 30)
+CAS_CLOSE = datetime.time(15, 15)  # continuous trading ends here for closing-auction (F&O) stocks
 
 
-def eastern_offset(utc):
-    """Hours from UTC for New York: -4 in daylight time, -5 otherwise.
-    DST runs from 2:00 a.m. on the second Sunday of March to 2:00 a.m. on the
-    first Sunday of November (US rule since 2007)."""
-    y = utc.year
-    start = datetime.datetime.combine(_nth_sunday(y, 3, 2), datetime.time(7, 0))   # 2:00 EST
-    end = datetime.datetime.combine(_nth_sunday(y, 11, 1), datetime.time(6, 0))    # 2:00 EDT
-    naive = utc.replace(tzinfo=None)
-    return -4 if start <= naive < end else -5
+def to_ist(utc):
+    """naive UTC -> naive India time."""
+    return utc.replace(tzinfo=None) + IST
 
 
-def to_eastern(utc):
-    return utc.replace(tzinfo=None) + datetime.timedelta(hours=eastern_offset(utc))
+def ist_to_utc(local):
+    """naive India time -> naive UTC."""
+    return local.replace(tzinfo=None) - IST
 
 
-def eastern_to_utc(local):
-    for off in (-4, -5):
-        utc = local - datetime.timedelta(hours=off)
-        if eastern_offset(utc) == off:
-            return utc
-    return local + datetime.timedelta(hours=5)
+def ts_to_ist(ts):
+    """Unix seconds -> naive India time. Never uses the computer's own time zone."""
+    return datetime.datetime(1970, 1, 1) + datetime.timedelta(seconds=int(ts)) + IST
 
 
 def parse_now(text):
-    """ISO time -> naive UTC. A time without an offset is taken as New York time."""
+    """ISO time -> naive UTC. A time without an offset is India time."""
     if not text:
         return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
-    t = text.strip().replace("Z", "+00:00")
     try:
-        dt = datetime.datetime.fromisoformat(t)
+        dt = datetime.datetime.fromisoformat(str(text).strip().replace("Z", "+00:00"))
     except ValueError:
-        raise RiskError("--now wants a time like \"2026-10-19 10:15\" (New York) or ...Z (UTC)")
+        raise ClockError('--now wants a time like "2026-10-30 10:15" (India time) or ...Z (UTC)')
     if dt.tzinfo is None:
-        return eastern_to_utc(dt)
+        return ist_to_utc(dt)
     return (dt - dt.utcoffset()).replace(tzinfo=None)
+
+
+def trading_day(d):
+    """(is_trading_day, reason) for an NSE date: weekends, holidays, special sessions, unknown years."""
+    iso = d.isoformat()
+    if iso in NSE_SPECIAL:
+        return False, "special session (%s): not traded by this pack" % NSE_SPECIAL[iso]
+    if d.weekday() >= 5:
+        return False, "weekend"
+    if d.year not in CALENDAR_YEARS:
+        return False, ("the NSE holiday list for %d is not in this tool yet: add it from nseindia.com "
+                       "(VERIFY.md section 3)" % d.year)
+    if iso in NSE_HOLIDAYS:
+        return False, "NSE holiday: " + NSE_HOLIDAYS[iso]
+    return True, ""
+
+
+def session(d):
+    """(open, close) in India time on a trading day, else None."""
+    return (OPEN, CLOSE) if trading_day(d)[0] else None
+
+
+def inr(x, paise=None):
+    """Rupees with Indian digit grouping: 100000 -> "₹1,00,000", 2913.4 -> "₹2,913.40".
+    paise=True always shows paise, False never does, None shows them when not zero."""
+    p = int(round(abs(float(x)) * 100))
+    whole, frac = divmod(p, 100)
+    if paise is False and frac:
+        whole, frac = int(round(abs(float(x)))), 0
+    s = str(whole)
+    if len(s) > 3:
+        head, groups = s[:-3], []
+        while len(head) > 2:
+            groups.insert(0, head[-2:])
+            head = head[:-2]
+        s = ",".join(([head] if head else []) + groups) + "," + s[-3:]
+    if paise is True or (paise is None and frac):
+        s += ".%02d" % frac
+    return ("-" if float(x) < 0 and p else "") + "₹" + s
+
+
+def tick_size(price):
+    """NSE cash-market tick for a price (circular of 2025-03-13, VERIFY.md section 3).
+    Kite's instrument list has each symbol's own tick: pass that instead once connected."""
+    p = float(price)
+    if p < 250:
+        return 0.01
+    for upper, tick in ((1000, 0.05), (5000, 0.10), (10000, 0.50), (20000, 1.00)):
+        if p <= upper:
+            return tick
+    return 5.00
+
+
+def to_tick(price, tick, way="nearest"):
+    """A price on the tick grid, in whole paise: way "down", "up" or "nearest" (half up)."""
+    t = int(round(float(tick) * 100))
+    p = float(price) * 100
+    if way == "down":
+        n = math.floor(p / t + 1e-9)
+    elif way == "up":
+        n = math.ceil(p / t - 1e-9)
+    else:
+        n = math.floor(p / t + 0.5 + 1e-9)
+    return round(n * t / 100.0, 2)
+# ---------------------------------------------------------------- end NSE clock
 
 
 def parse_utc(text):
@@ -185,73 +226,36 @@ def parse_utc(text):
     return dt
 
 
-def trading_day(d):
-    """(is_trading_day, reason). Weekends and the NYSE holiday list."""
-    if d.weekday() >= 5:
-        return False, "weekend"
-    name = NYSE_HOLIDAYS.get(d.isoformat())
-    if name:
-        return False, "NYSE holiday: " + name
-    return True, ""
-
-
 def hhmm(value, key):
-    """"09:45" -> time(9, 45); None or "" -> None (that bound is off)."""
+    """"09:30" -> time(9, 30); None or "" -> None (that bound is off)."""
     if value in (None, "", False):
         return None
     m = HHMM.match(str(value).strip())
     if not m:
-        raise RiskError("%s must be a New York time like \"09:45\", got %r" % (key, value))
+        raise RiskError("%s must be an India time like \"09:30\", got %r" % (key, value))
     return datetime.time(int(m.group(1)), int(m.group(2)))
 
 
-def _shift(t, hours):
-    dt = datetime.datetime.combine(datetime.date(2000, 1, 1), t) - datetime.timedelta(hours=hours)
-    return dt.time()
-
-
-def window_check(now_et, c):
-    """Reasons an entry cannot be placed now (New York time). Empty when the window is off."""
+def window_check(now_ist, c):
+    """Reasons an entry cannot be placed now (India time)."""
     before = hhmm(c.get("no_entries_before"), "no_entries_before")
     after = hhmm(c.get("no_entries_after"), "no_entries_after")
-    if before is None and after is None:
-        return [], []
-    warns = []
-    d, t = now_et.date(), now_et.time().replace(second=0, microsecond=0)
-    if d.year not in CALENDAR_YEARS:
-        warns.append("the holiday list covers %s only: check nyse.com for %s"
-                     % (" and ".join(map(str, CALENDAR_YEARS)), d.isoformat()))
+    d, t = now_ist.date(), now_ist.time().replace(second=0, microsecond=0)
     ok, why = trading_day(d)
-    stamp = now_et.strftime("%a %Y-%m-%d %H:%M")
+    stamp = now_ist.strftime("%a %Y-%m-%d %H:%M")
     if not ok:
-        return ["window: the market is closed today (%s, %s New York)" % (why, stamp)], warns
-    close = EARLY if d.isoformat() in NYSE_EARLY_CLOSE else CLOSE
-    if t < OPEN or now_et.time() >= close:
-        return ["window: the market is closed (%s New York; the session is %s to %s)"
-                % (stamp, OPEN.strftime("%H:%M"), close.strftime("%H:%M"))], warns
-    if close == EARLY and after is not None:
-        after = _shift(after, 3)
-        warns.append("early close at 1:00 p.m. today (%s): no new entries after %s"
-                     % (NYSE_EARLY_CLOSE[d.isoformat()], after.strftime("%H:%M")))
+        return ["window: NSE is closed today (%s, %s India time)" % (why, stamp)]
+    if t < OPEN or now_ist.time() >= CLOSE:
+        return ["window: NSE is closed (%s India time; the session is 09:15 to 15:30)" % stamp]
     if before is not None and t < before:
-        return ["window: no new entries before %s New York (it is %s)" % (before.strftime("%H:%M"),
-                                                                          t.strftime("%H:%M"))], warns
+        return ["window: no new entries before %s (it is %s)" % (before.strftime("%H:%M"), t.strftime("%H:%M"))]
     if after is not None and t > after:
-        return ["window: no new entries after %s New York (it is %s)" % (after.strftime("%H:%M"),
-                                                                         t.strftime("%H:%M"))], warns
-    return [], warns
+        return ["window: no new entries after %s (it is %s)" % (after.strftime("%H:%M"), t.strftime("%H:%M"))]
+    return []
 
 
-def business_days(today, n=5):
-    """The last n NYSE trading days up to and including today, newest first."""
-    out, d = [], today
-    for _ in range(40):
-        if trading_day(d)[0]:
-            out.append(d.isoformat())
-            if len(out) == n:
-                break
-        d -= datetime.timedelta(days=1)
-    return out
+def monday_of(d):
+    return d - datetime.timedelta(days=d.weekday())
 
 
 # ---------------------------------------------------------------- files and helpers
@@ -270,7 +274,7 @@ def read_json(path, what, required=True):
 
 def fingerprint(order):
     """Same function in trader-broker/ticket.py: the exact order that was checked."""
-    core = {k: order[k] for k in ALPACA_FIELDS if k in order and order[k] is not None}
+    core = {k: order[k] for k in NEUTRAL_FIELDS if k in order and order[k] is not None}
     blob = json.dumps(core, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
@@ -282,127 +286,96 @@ def _f(x):
         return None
 
 
-def money(x):
-    return "$" + "{:,.2f}".format(float(x)).replace(".00", "")
+def _num(x):
+    x = float(x)
+    return str(int(x)) if x == int(x) else ("%.2f" % x).rstrip("0").rstrip(".")
 
 
-def _cent(x):
-    """A price to the cent, half up (366.475 -> 366.48)."""
-    return int(float(x) * 100 + 0.5 + 1e-9) / 100.0
+def ledger_view(ledger, today, capital):
+    """What the account ledger says: balance, open positions, today's and this week's numbers."""
+    led = ledger or {}
+    trades = [t for t in led.get("trades", []) if isinstance(t, dict)]
+    balance = _f(led.get("balance"))
+    if balance is None:
+        balance = capital + sum(_f(t.get("net_pnl")) or 0 for t in trades if t.get("status") == "closed")
+    d = datetime.date.fromisoformat(today)
+    week0 = monday_of(d).isoformat()
+    opened_today = [t for t in trades if str(t.get("date")) == today]
+    open_now = [t for t in trades if t.get("status") == "open"]
+    closed = [t for t in trades if t.get("status") == "closed"]
+    real_today = sum(_f(t.get("net_pnl")) or 0 for t in closed if str(t.get("exit_date") or t.get("date")) == today)
+    real_week = sum(_f(t.get("net_pnl")) or 0 for t in closed
+                    if week0 <= str(t.get("exit_date") or t.get("date")) <= today)
+    open_risk = sum(_f(t.get("max_loss")) or 0 for t in open_now)
+    held = {}
+    for t in open_now:
+        s = str(t.get("symbol", "")).upper()
+        held[s] = held.get(s, 0) + int(_f(t.get("qty")) or 0)
+    return {"balance": round(balance, 2), "open": open_now, "held": held, "entries_today": len(opened_today),
+            "realised_today": round(real_today, 2), "realised_week": round(real_week, 2),
+            "open_risk": round(open_risk, 2), "week_from": week0}
 
 
-def _p(x):
-    return "%.2f" % float(x)
-
-
-def account(cfg, portfolio, prices):
-    """Starting account: cash and position values. No portfolio = a fresh
-    account funded with the budget."""
-    warnings = []
-    if portfolio is None:
-        budget = _f(cfg.get("budget"))
-        if not budget:
-            raise RiskError("no trader/portfolio.json and no budget in the config: "
-                            "nothing to check the orders against")
-        return {"cash": budget, "shares": {}, "values": {}}, warnings
-    cash = _f(portfolio.get("cash"))
-    if cash is None:
-        raise RiskError("portfolio.json needs a \"cash\" number")
-    shares, values = {}, {}
-    for p in portfolio.get("positions", []):
-        t = str(p.get("ticker") or p.get("symbol") or "").upper()
-        if not t:
-            continue
-        n = _f(p.get("shares", p.get("qty")))
-        if n is None:
-            n = sum(_f(l.get("shares")) or 0 for l in p.get("lots", []))
-        shares[t] = shares.get(t, 0) + n
-        if prices.get(t):
-            values[t] = shares[t] * prices[t]
-        else:
-            basis = sum(_f(l.get("cost")) or 0 for l in p.get("lots", []))
-            values[t] = basis
-            warnings.append("no price for %s: valued at its cost basis %s" % (t, money(basis)))
-    return {"cash": cash, "shares": shares, "values": values}, warnings
-
-
-def rec_day(rec):
-    return str(rec.get("date") or str(rec.get("at", ""))[:10])
-
-
-def rec_is_entry(rec):
-    """trader-broker logs the kind trader-risk gave; older records: a buy is an entry."""
-    k = rec.get("kind")
-    if k:
-        return k == "entry"
-    return str(rec.get("side", "")).lower() == "buy"
-
-
-def placed_today(state, today):
-    """Orders recorded as placed today by trader-broker."""
-    out = []
-    for rec in (state or {}).get("orders", []):
-        if rec.get("status") == "placed" and rec_day(rec) == today:
-            out.append(rec)
-    return out
-
-
-def day_trades(state, today):
-    """Day trades in the last 5 business days: a (day, symbol) with both a buy
-    and a sell placed or filled that day. An entry placed today counts too: it
-    is meant to be flat by the close. Returns (count, sorted list of "day SYM")."""
-    days = set(business_days(datetime.date.fromisoformat(today)))
-    sides = {}
-    for rec in (state or {}).get("orders", []):
-        if rec.get("status") not in ("placed", "filled"):
-            continue
-        d = rec_day(rec)
-        if d not in days:
-            continue
-        key = (d, str(rec.get("symbol", "")).upper())
-        sides.setdefault(key, set()).add(str(rec.get("side", "")).lower())
-        if d == today and rec.get("status") == "placed" and rec_is_entry(rec):
-            sides[key].add("pending")
-    hits = sorted("%s %s" % k for k, s in sides.items()
-                  if ("buy" in s and "sell" in s) or (k[0] == today and "pending" in s))
-    return len(hits), hits
+def kite_ready(c, kite_state, today):
+    """(ok, why): live mode needs kite_enabled and a Kite connection check from today."""
+    if not c.get("kite_enabled"):
+        return False, ("\"mode\" is \"live\" but \"kite_enabled\" is not true: live orders stay off until you set "
+                       "both yourself and connect Kite (trader-broker SKILL.md)")
+    ks = kite_state or {}
+    if not ks.get("verified") or str(ks.get("date")) != today:
+        return False, ("Kite is not verified today: run trader-broker's kite.py check after your daily Kite "
+                       "login (an access token lasts one day)")
+    return True, ""
 
 
 # ---------------------------------------------------------------- the check
 
-def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=None, price_times=None):
-    """Pure function. Returns {"results": [...], "pass": n, "block": n, "warnings": [...]}.
+def check(orders, cfg, ledger=None, prices=None, kite_state=None, today=None, now=None, price_times=None):
+    """Pure function. Returns {"results": [...], "pass": n, "block": n, "warnings": [...], ...}.
 
-    now          naive UTC (default: the real clock); its New York date is "today"
+    now          naive UTC (default: the real clock); its India date is "today"
     price_times  {SYM: naive UTC time of that price}; None = every price counts as fresh"""
     c = dict(DEFAULTS)
     c.update(cfg or {})
+    rates = chg.rates_from(c)
+    slip = float(c.get("paper_slippage_pct") or 0) if c.get("limits_include_slippage", True) else 0.0
     prices = {str(k).upper(): float(v) for k, v in (prices or {}).items() if _f(v)}
     now_utc = now or parse_now(None)
-    now_et = to_eastern(now_utc)
-    today = today or now_et.date().isoformat()
-    acct, top_warn = account(c, portfolio, prices)
+    now_ist = to_ist(now_utc)
+    today = today or now_ist.date().isoformat()
+    capital = float(c.get("capital_inr") or 0)
+    mode = str(c.get("mode") or "paper").lower()
+    view = ledger_view(ledger, today, capital)
+    top_warn = []
     blocked = {str(b).upper() for b in c.get("blocked") or []}
-    done_today = placed_today(state, today)
-    count_today = len(done_today)
-    entries_today = [r for r in done_today if rec_is_entry(r)]
-    loss_today = 0.0
-    for r in entries_today:
-        ml = _f(r.get("max_loss"))
-        if ml is None:
-            top_warn.append("an entry placed today (%s %s) has no max loss in the log; not counted in "
-                            "the daily loss" % (r.get("side"), r.get("symbol")))
+    win_reasons = window_check(now_ist, c)
+    mode_reasons = []
+    if mode not in ("paper", "live"):
+        mode_reasons.append("mode: \"mode\" must be \"paper\" or \"live\", got %r" % c.get("mode"))
+    elif mode == "live":
+        ok, why = kite_ready(c, kite_state, today)
+        if not ok:
+            mode_reasons.append("mode: " + why)
         else:
-            loss_today += ml
-    placed_keys = {(str(r.get("symbol", "")).upper(), r.get("side")) for r in done_today}
-    win_reasons, win_warns = window_check(now_et, c)
-    pdt_n, pdt_list = day_trades(state, today) if c.get("pdt_guard") else (0, [])
+            top_warn.append("LIVE mode: these orders use real money")
+    pause_at = capital - float(c.get("max_drawdown_pause_inr") or 0)
+    paused = bool(c.get("max_drawdown_pause_inr")) and view["balance"] <= pause_at + EPS
+    if paused:
+        top_warn.append("the account is at %s, %s below the %s you started with: the drawdown pause is on. Stop "
+                        "and review your trades before you continue." % (inr(view["balance"], True),
+                                                                        inr(capital - view["balance"], True),
+                                                                        inr(capital)))
+    daily = _f(c.get("max_daily_loss_inr"))
+    weekly = _f(c.get("max_weekly_loss_inr"))
+    used_day = max(0.0, -view["realised_today"]) + view["open_risk"]
+    used_week = max(0.0, -view["realised_week"]) + view["open_risk"]
+    cash = view["balance"] - sum((_f(t.get("entry_fill")) or _f(t.get("entry")) or 0) * int(_f(t.get("qty")) or 0)
+                                 for t in view["open"])
+    buffer_inr = capital * float(c.get("cash_buffer_pct") or 0) / 100.0
+    held = dict(view["held"])
     seen = set()
     results = []
-    batch_entries, batch_loss = 0, 0.0
-    if not c.get("paper", True):
-        top_warn.append("LIVE account (\"paper\": false): these orders use real money")
-    top_warn.extend(win_warns)
+    batch_entries, batch_loss, batch_open = 0, 0.0, 0
 
     def fresh(sym):
         if sym not in prices:
@@ -416,303 +389,198 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         return prices[sym] if -60 <= age <= FRESH_MINUTES * 60 else None
 
     for i, o in enumerate(orders, 1):
-        reasons, warns, info = [], [], []
-        later = []                       # entry-only reasons, turned into warnings for an exit
+        reasons, warns, info, later = [], [], [], []
         sym = str(o.get("symbol", "")).strip().upper()
         side = str(o.get("side", "")).strip().lower()
-        typ = str(o.get("type", "market")).strip().lower()
-        tif = str(o.get("time_in_force", "day")).strip().lower()
-        qty, notional = o.get("qty"), o.get("notional")
+        etype = str(o.get("entry_type", "market")).strip().lower()
+        qty = _f(o.get("qty"))
         plan = o.get("plan") if isinstance(o.get("plan"), dict) else {}
-        oc = str(o.get("order_class") or "").strip().lower()
-        legs = o.get("take_profit_limit_price") is not None or o.get("stop_loss_stop_price") is not None
-        bracket = oc == "bracket" or (not oc and legs)
-        value = None
 
         # format
-        if not sym:
-            reasons.append("format: no symbol")
+        if not sym or not SYMBOL.match(sym):
+            reasons.append("format: %r is not an NSE symbol" % o.get("symbol"))
         if side not in ("buy", "sell"):
             reasons.append("format: side must be buy or sell, got %r" % o.get("side"))
-        if (qty is None) == (notional is None):
-            reasons.append("format: give exactly one of qty or notional")
-        for k in PRICE_FIELDS:
-            if o.get(k) is not None:
-                v = _f(o.get(k))
-                if v is None or v <= 0:
-                    reasons.append("format: %s must be a positive number, got %r" % (k, o.get(k)))
-                elif not isinstance(o.get(k), str):
-                    warns.append("send %s as a string (\"%s\"), the way place_stock_order types it"
-                                 % (k, o.get(k)))
-        if typ not in TYPES:
-            reasons.append("format: unknown order type %r" % typ)
-        if tif not in TIFS:
-            reasons.append("format: unknown time_in_force %r" % tif)
-        if notional is not None and (typ != "market" or tif != "day"):
-            reasons.append("format: a notional (dollar) order must be a market order with time_in_force day")
-        if typ in ("limit", "stop_limit") and o.get("limit_price") is None:
-            reasons.append("format: a %s order needs a limit_price" % typ)
-        if typ in ("stop", "stop_limit") and o.get("stop_price") is None:
-            reasons.append("format: a %s order needs a stop_price" % typ)
-        if o.get("extended_hours") and not (typ == "limit" and tif in ("day", "gtc")):
-            reasons.append("format: extended hours needs a limit order with time_in_force day or gtc")
-        if o.get("stop_loss_limit_price") is not None and o.get("stop_loss_stop_price") is None:
-            reasons.append("format: stop_loss_limit_price needs a stop_loss_stop_price")
-        if bracket:
-            if notional is not None:
-                reasons.append("format: a bracket order needs a whole-share qty, not a notional amount")
-            elif _f(qty) is not None and abs(_f(qty) - round(_f(qty))) > 1e-9:
-                reasons.append("format: a bracket order takes whole shares only, got qty %r" % qty)
-            if tif not in ("day", "gtc"):
-                reasons.append("format: a bracket order needs time_in_force day or gtc, got %r" % tif)
-            if o.get("take_profit_limit_price") is None or o.get("stop_loss_stop_price") is None:
-                reasons.append("format: a bracket order needs both take_profit_limit_price and "
-                               "stop_loss_stop_price")
-        elif oc or o.get("advanced_instructions"):
-            warns.append("advanced order (%s): check every leg before you say yes"
-                         % (oc or "advanced_instructions"))
+        if qty is None or qty <= 0 or abs(qty - round(qty)) > EPS:
+            reasons.append("format: qty must be a whole number of shares, got %r" % o.get("qty"))
+            qty = None
+        if str(o.get("exchange", "NSE")).upper() != "NSE":
+            reasons.append("format: this pack trades NSE only, got exchange %r" % o.get("exchange"))
+        if str(o.get("product", "MIS")).upper() != "MIS":
+            reasons.append("format: product must be MIS (intraday); delivery, F&O and margin products are off")
+        if etype not in ("market", "limit"):
+            reasons.append("format: entry_type must be market or limit, got %r" % etype)
+        if etype == "limit" and not _f(o.get("limit_price")):
+            reasons.append("format: a limit order needs a limit_price")
+        reasons.extend(mode_reasons)
 
-        # asset
-        if sym and OCC.match(sym.replace(" ", "")):
-            if not c.get("allow_options"):
-                reasons.append("asset: %s is an option contract; options are off "
-                               "(\"allow_options\": false)" % sym)
-            else:
-                warns.append("option order: options can lose 100%% of what you pay")
-        elif sym and ("/" in sym or not TICKER.match(sym)):
-            reasons.append("asset: %s does not look like a US stock or ETF ticker; "
-                           "this pack trades stocks and ETFs only" % sym)
+        # entry or exit
+        have = held.get(sym, 0)
+        exiting = side == "sell" and qty is not None and have > 0 and qty <= have + EPS
+        kind = "exit" if exiting else "entry"
+        if side == "sell" and not exiting and not c.get("allow_short"):
+            reasons.append("short: selling %s %s but you hold %d; short selling is off" % (
+                _num(qty or 0), sym, have))
 
-        # the reference price: what one share costs to get in
+        # the reference price
         plan_entry = _f(plan.get("entry"))
         live = fresh(sym)
         ref, ref_from = None, None
-        if typ in ("limit", "stop_limit"):
+        if etype == "limit":
             ref, ref_from = _f(o.get("limit_price")), "limit"
-        elif typ == "stop":
-            ref, ref_from = _f(o.get("stop_price")), "stop price"
-        if ref is None:
+        else:
             cands = [(p, w) for p, w in ((plan_entry, "plan"), (live, "price")) if p]
             if cands:
                 ref, ref_from = max(cands, key=lambda x: x[0])
-                ref = _cent(ref)
-                if live and ref_from == "price" and plan_entry and live > plan_entry + CENT:
-                    info.append("%s last %s is above the plan's entry %s: the risk is measured from %s"
-                                % (sym, _p(ref), _p(plan_entry), _p(ref)))
-            elif sym in prices:
-                ref, ref_from = prices[sym], "stale price"
-        if plan_entry and live is None and sym in prices and price_times is not None and typ == "market":
-            warns.append("the %s price in trader/prices.json is older than %d minutes: not used"
-                         % (sym, FRESH_MINUTES))
-        q = _f(qty)
-        if notional is not None and _f(notional):
-            value = _f(notional)
-        elif q:
-            if ref:
-                value = q * ref
+                if live and ref_from == "price" and plan_entry and live > plan_entry + 0.005:
+                    info.append("%s last %.2f is above the plan's entry %.2f: the risk is measured from %.2f"
+                                % (sym, live, plan_entry, live))
+        if plan_entry and live is None and sym in prices and price_times is not None and etype == "market":
+            warns.append("the %s price in trader/prices.json is older than %d minutes: not used" % (sym, FRESH_MINUTES))
+        value = (qty or 0) * ref if ref else None
 
-        # entry or exit
-        held = acct["shares"].get(sym, 0.0)
-        held_value = acct["values"].get(sym, 0.0)
-        exiting = False
-        if side == "sell" and held > 1e-9:
-            if q is not None:
-                exiting = q <= held + 1e-9
-            elif value is not None:
-                exiting = value <= held_value + CENT
-        elif side == "buy" and held < -1e-9 and q is not None:
-            exiting = q <= -held + 1e-9
-        kind = "exit" if exiting else "entry"
-        if kind == "entry" and value is None and q:
-            later.append("price: no price for %s to size a %s-share order; add it to "
-                         "trader/prices.json (trader-alerts: alerts.py quote %s --write)" % (sym, qty, sym))
-
-        # blocked list and size
-        if sym in blocked:
-            later.append("blocked: %s is on your blocked list" % sym)
-        if value is not None:
-            if value < float(c.get("min_order_usd") or 0) - CENT:
-                later.append("size: %s is under your %s minimum order"
-                             % (money(value), money(c["min_order_usd"])))
-            if c.get("max_order_usd") and value > float(c["max_order_usd"]) + CENT:
-                later.append("size: %s is over your %s max order"
-                             % (money(value), money(c["max_order_usd"])))
-
-        # account effects, simulated in order
-        cash = acct["cash"]
-        total = cash + sum(acct["values"].values())
-        buffer_usd = total * float(c.get("cash_buffer_pct") or 0) / 100.0
-        if value is not None and side == "buy" and kind == "entry":
-            after_cash = cash - value
-            if after_cash < -CENT and not c.get("allow_margin"):
-                later.append("cash: needs %s but only %s cash; that would be margin (borrowed money)"
-                             % (money(value), money(cash)))
-            elif after_cash < buffer_usd - CENT:
-                later.append("cash: leaves %s cash, under your %s%% buffer of %s"
-                             % (money(max(after_cash, 0)), _pct(c["cash_buffer_pct"]), money(buffer_usd)))
-            pos_after = held_value + value
-            limit = total * float(c.get("max_position_pct") or 100) / 100.0
-            if total > 0 and pos_after > limit + CENT:
-                later.append("position: %s would be %s, %.1f%% of the %s account, over your %s%% cap"
-                             % (sym, money(pos_after), 100.0 * pos_after / total, money(total),
-                                _pct(c["max_position_pct"])))
-        if side == "sell" and sym and kind == "entry":
-            if q is not None:
-                over = q > held + 1e-9
-            elif value is not None:
-                over = value > held_value + CENT
-            else:
-                over = held <= 0
-            if over and not c.get("allow_short"):
-                reasons.append("short: selling more %s than you hold (%s shares); short selling is off. "
-                               "If you bought it, record the fill first (ticket.py fill)" % (sym, _num(held)))
-
-        # day-trade checks: stop, loss, reward:risk, daily loss, trades, window, pdt
-        max_loss = risk_ps = rr = stop = target = None
-        if kind == "entry" and side in ("buy", "sell"):
-            long = side == "buy"
-            leg_stop, plan_stop = _f(o.get("stop_loss_stop_price")), _f(plan.get("stop"))
-            stop = leg_stop if leg_stop else plan_stop
-            target = _f(o.get("take_profit_limit_price")) or _f(plan.get("target"))
-            if leg_stop and plan_stop and abs(leg_stop - plan_stop) > CENT:
-                warns.append("the bracket stop %s differs from the plan's stop %s: the bracket's is the one "
-                             "the broker uses" % (_p(leg_stop), _p(plan_stop)))
-            if stop and not leg_stop:
-                warns.append("the stop %s is in the plan only, not at the broker: set a stop alert "
-                             "(trader-alerts: alerts.py add --from-plan)" % _p(stop))
+        max_loss = rr = charge_pct = None
+        if kind == "entry" and side == "buy":
+            if paused:
+                later.append("pause: the account is %s below capital (limit %s). All paper trading stops until "
+                             "you review it." % (inr(capital - view["balance"], True),
+                                                 inr(c["max_drawdown_pause_inr"])))
+            if sym in blocked:
+                later.append("blocked: %s is on your blocked list" % sym)
+            stop, target = _f(o.get("stop")), _f(o.get("target"))
             if not stop:
                 if c.get("require_stop", True):
-                    later.append("stop: no stop. Every entry needs one (\"require_stop\": true): a bracket "
-                                 "stop_loss_stop_price, from trader-exit and trader-budget")
+                    later.append("stop: no stop. Every entry needs one (trader-exit sets it)")
+            elif ref is None:
+                later.append("price: no entry price to measure the risk from (the order has no plan entry and "
+                             "no fresh price)")
+            elif stop >= ref - 0.005:
+                later.append("stop: the stop %.2f must be below the entry %.2f" % (stop, ref))
+            elif qty:
+                bf, sf = ref * (1 + slip / 100.0), stop * (1 - slip / 100.0)
+                cs = chg.charges(qty * bf, qty * sf, rates)
+                max_loss = round(qty * (bf - sf) + cs["total"], 2)
+                cap = _f(c.get("max_loss_per_trade_inr"))
+                if cap and max_loss > cap + EPS:
+                    later.append("loss: %d shares lose %s if the stop %.2f fills (risk %.2f a share + %s charges%s), "
+                                 "over your %s max loss per trade" % (
+                                     qty, inr(max_loss, True), stop, ref - stop, inr(cs["total"], True),
+                                     " + slippage" if slip else "", inr(cap)))
+                if not target:
+                    later.append("reward: no target to measure reward:risk against")
+                elif target <= ref + 0.005:
+                    later.append("reward: the target %.2f must be above the entry %.2f" % (target, ref))
                 else:
-                    warns.append("no stop: the max loss is not capped, so it is not counted in the daily loss")
-            elif ref:
-                if (long and stop >= ref - CENT) or (not long and stop <= ref + CENT):
-                    later.append("stop: the stop %s must be %s the entry %s for a %s"
-                                 % (_p(stop), "below" if long else "above", _p(ref), side))
-                else:
-                    risk_c = int(round(abs(ref - stop) * 100))
-                    risk_ps = risk_c / 100.0
-                    shares = q if q is not None else ((value or 0) / ref)
-                    max_loss = round(shares * risk_ps, 2)
-                    cap = _f(c.get("max_loss_per_trade_usd"))
-                    if cap and max_loss > cap + CENT:
-                        later.append("loss: %s shares x %s risk a share = %s at the stop, over your %s max loss "
-                                     "per trade" % (_num(shares), _p(risk_ps), money(max_loss), money(cap)))
-                    min_rr = _f(c.get("min_reward_risk"))
-                    if target:
-                        if (long and target <= ref + CENT) or (not long and target >= ref - CENT):
-                            later.append("target: the target %s must be %s the entry %s"
-                                         % (_p(target), "above" if long else "below", _p(ref)))
-                        else:
-                            rr = round(int(round(abs(target - ref) * 100)) / float(risk_c), 2)
-                            if min_rr and rr < min_rr - 1e-9:
-                                later.append("reward:risk: %.2f (target %s, entry %s, stop %s) is under your "
-                                             "minimum %s" % (rr, _p(target), _p(ref), _p(stop), _num(min_rr)))
-                    elif min_rr:
-                        later.append("reward:risk: no target to measure it against (min_reward_risk %s)"
-                                     % _num(min_rr))
-            daily = _f(c.get("max_daily_loss_usd"))
+                    tf = target * (1 - slip / 100.0)
+                    ct = chg.charges(qty * bf, qty * tf, rates)
+                    gain = qty * (tf - bf) - ct["total"]
+                    rr = round(gain / max_loss, 2) if max_loss > 0 else None
+                    mrr = _f(c.get("min_reward_risk"))
+                    if mrr and (rr is None or rr < mrr - EPS):
+                        later.append("reward: reward:risk after charges is %.2f (net %s at the target %.2f vs %s at "
+                                     "the stop), under your minimum %s" % (rr or 0, inr(gain, True), target,
+                                                                          inr(max_loss, True), _num(mrr)))
+                    gross = qty * (target - ref)
+                    plain = chg.charges(qty * ref, qty * target, rates)["total"]
+                    charge_pct = round(100.0 * plain / gross, 1)
+                    mc = _f(c.get("max_charges_pct_of_target"))
+                    if mc and charge_pct > mc + EPS:
+                        later.append("charges: %s of charges is %.1f%% of the %s gross profit at the target, over "
+                                     "your %s%% limit" % (inr(plain, True), charge_pct, inr(gross, True), _num(mc)))
+            if value is not None:
+                cap_v = _f(c.get("max_position_value_inr"))
+                if cap_v and value > cap_v + 0.005:
+                    later.append("position: %s of %s is over your %s position cap" % (inr(value, True), sym,
+                                                                                      inr(cap_v)))
+                if value > cash + 0.005 and not c.get("allow_margin"):
+                    later.append("cash: needs %s but the account has %s free; that would be margin (borrowed "
+                                 "money), and leverage is off" % (inr(value, True), inr(max(cash, 0), True)))
+                elif cash - value < buffer_inr - 0.005:
+                    later.append("cash: leaves %s, under your %s%% cash buffer of %s" % (
+                        inr(max(cash - value, 0), True), _num(c["cash_buffer_pct"]), inr(buffer_inr)))
             if daily and max_loss is not None:
-                used = loss_today + batch_loss
-                if used + max_loss > daily + CENT:
-                    later.append("daily loss: %s already at risk today plus %s for this one = %s, over your %s "
-                                 "daily loss limit" % (money(used), money(max_loss), money(used + max_loss),
-                                                       money(daily)))
+                used = used_day + batch_loss
+                if used >= daily - EPS:
+                    later.append("daily: today's realised loss and open risk already reach your %s daily limit. "
+                                 "No new entries today." % inr(daily))
+                elif used + max_loss > daily + EPS:
+                    later.append("daily: %s used today (realised loss %s + open risk %s) plus %s for this one = %s, "
+                                 "over your %s daily limit" % (
+                                     inr(used, True), inr(max(0, -view["realised_today"]), True),
+                                     inr(view["open_risk"] + batch_loss, True), inr(max_loss, True),
+                                     inr(used + max_loss, True), inr(daily)))
+            if weekly and max_loss is not None:
+                used = used_week + batch_loss
+                if used >= weekly - EPS:
+                    later.append("weekly: this week's realised loss and open risk already reach your %s weekly "
+                                 "limit. No new entries until next Monday." % inr(weekly))
+                elif used + max_loss > weekly + EPS:
+                    later.append("weekly: %s used this week plus %s for this one = %s, over your %s weekly limit "
+                                 "(it resets on Monday)" % (inr(used, True), inr(max_loss, True),
+                                                            inr(used + max_loss, True), inr(weekly)))
             cap_t = int(c.get("max_trades_per_day") or 0)
-            if cap_t and len(entries_today) + batch_entries >= cap_t:
-                later.append("trades: %d entries placed today plus %d passed earlier in this batch, your limit "
-                             "is %d a day" % (len(entries_today), batch_entries, cap_t))
+            if cap_t and view["entries_today"] + batch_entries >= cap_t:
+                later.append("trades: %d entries already today, your limit is %d a day" % (
+                    view["entries_today"] + batch_entries, cap_t))
+            cap_o = int(c.get("max_open_positions") or 0)
+            if cap_o and len(view["open"]) + batch_open >= cap_o:
+                later.append("open: %d position%s already open (%s), your limit is %d" % (
+                    len(view["open"]) + batch_open, "" if len(view["open"]) + batch_open == 1 else "s",
+                    ", ".join(sorted(view["held"])) or "this batch", cap_o))
             later.extend(win_reasons)
-            if c.get("pdt_guard") and pdt_n >= 3:
-                later.append("pdt: %d day trades in the last 5 business days (%s); a 4th trips the "
-                             "pattern-day-trader rule your broker applies (\"pdt_guard\": true)"
-                             % (pdt_n, ", ".join(pdt_list)))
-            if stop and ref and risk_ps:
-                info.append("entry %s (%s), stop %s, target %s: risk %s a share"
-                            % (_p(ref), REF_WORDS.get(ref_from, ref_from), _p(stop),
-                               _p(target) if target else "none", _p(risk_ps)))
-                info.append("max loss %s%s, reward:risk %s%s"
-                            % (money(max_loss), (" (limit %s)" % money(c["max_loss_per_trade_usd"]))
-                               if _f(c.get("max_loss_per_trade_usd")) else "",
-                               ("%.2f" % rr) if rr is not None else "n/a",
-                               (" (min %s)" % _num(c["min_reward_risk"])) if _f(c.get("min_reward_risk")) else ""))
-            if daily or cap_t:
-                info.append("today before this: %d of %s trades, %s of %s daily loss"
-                            % (len(entries_today) + batch_entries, cap_t or "unlimited",
-                               money(loss_today + batch_loss), money(daily) if daily else "no limit on"))
+            if stop and ref and max_loss is not None:
+                info.append("entry %.2f (%s), stop %.2f, target %s: %d shares, %s order value"
+                            % (ref, REF_WORDS.get(ref_from, ref_from), stop, ("%.2f" % target) if target else "none",
+                               qty, inr(value, True)))
+                info.append("loss at the stop %s incl. charges%s (limit %s); reward:risk after charges %s (min %s)"
+                            % (inr(max_loss, True), " and slippage" if slip else "",
+                               inr(c["max_loss_per_trade_inr"]), ("%.2f" % rr) if rr is not None else "n/a",
+                               _num(c["min_reward_risk"])))
+            info.append("today before this: %d of %s trades, %s of %s daily; this week %s of %s"
+                        % (view["entries_today"] + batch_entries, c.get("max_trades_per_day") or "unlimited",
+                           inr(used_day + batch_loss, True), inr(daily) if daily else "no limit",
+                           inr(used_week + batch_loss, True), inr(weekly) if weekly else "no limit"))
 
-        # duplicates and the daily order limit
         key = (sym, side)
         if key in seen:
             later.append("duplicate: a second %s %s in this batch" % (side, sym))
-        if key in placed_keys:
-            later.append("duplicate: a %s %s was already placed today" % (side, sym))
-        passed_so_far = sum(1 for r in results if r["verdict"] == "PASS")
-        cap_n = int(c.get("max_orders_per_day") or 0)
-        if cap_n and count_today + passed_so_far >= cap_n:
-            later.append("daily limit: %d placed today plus %d passed earlier in this batch, "
-                         "your limit is %d a day" % (count_today, passed_so_far, cap_n))
         seen.add(key)
 
         if kind == "entry":
             reasons.extend(later)
         else:
             warns.extend("exit, not blocked: " + x for x in later)
-
+            if win_reasons:
+                warns.extend("exit, not blocked: " + x for x in win_reasons)
         verdict = "BLOCK" if reasons else "PASS"
-        if verdict == "PASS":
-            if kind == "entry" and side in ("buy", "sell"):
-                batch_entries += 1
-                batch_loss += max_loss or 0.0
-            if side == "buy":
-                if value is not None:
-                    acct["cash"] -= value
-                    acct["values"][sym] = acct["values"].get(sym, 0.0) + value
-                if q is not None:
-                    acct["shares"][sym] = held + q
-                elif ref and value is not None:
-                    acct["shares"][sym] = held + value / ref
-            elif side == "sell":
-                if value is not None:
-                    acct["cash"] += value
-                    acct["values"][sym] = max(acct["values"].get(sym, 0.0) - value, 0.0)
-                if q is not None:
-                    acct["shares"][sym] = held - q
-                elif ref and value is not None:
-                    acct["shares"][sym] = held - value / ref
+        if verdict == "PASS" and kind == "entry" and side == "buy":
+            batch_entries += 1
+            batch_open += 1
+            batch_loss += max_loss or 0.0
+            cash -= value or 0.0
+            held[sym] = held.get(sym, 0) + int(qty or 0)
+        elif verdict == "PASS" and kind == "exit":
+            held[sym] = have - int(qty or 0)
         results.append({
-            "index": i, "symbol": sym, "side": side, "kind": kind,
-            "amount": money(_f(notional) or 0) if notional is not None else ("%s shares" % qty),
-            "value_usd": round(value, 2) if value is not None else None,
+            "index": i, "symbol": sym, "side": side, "kind": kind, "qty": int(qty) if qty else None,
+            "value_inr": round(value, 2) if value is not None else None,
             "entry_ref": round(ref, 2) if ref else None, "entry_ref_from": ref_from,
-            "stop": stop, "target": target, "risk_per_share": risk_ps, "max_loss": max_loss,
-            "reward_risk": rr, "fingerprint": fingerprint(o), "verdict": verdict,
-            "reasons": reasons, "warnings": warns, "info": info,
+            "stop": _f(o.get("stop")), "target": _f(o.get("target")), "max_loss": max_loss,
+            "reward_risk_net": rr, "charges_pct_of_target": charge_pct, "fingerprint": fingerprint(o),
+            "verdict": verdict, "reasons": reasons, "warnings": warns, "info": info,
         })
 
     return {
-        "date": today,
-        "now_new_york": now_et.strftime("%Y-%m-%d %H:%M"),
-        "paper": bool(c.get("paper", True)),
+        "date": today, "now_india": now_ist.strftime("%Y-%m-%d %H:%M"), "mode": mode,
         "results": results,
         "pass": sum(1 for r in results if r["verdict"] == "PASS"),
         "block": sum(1 for r in results if r["verdict"] == "BLOCK"),
         "warnings": top_warn,
-        "cash_after": round(acct["cash"], 2),
-        "today": {"orders_placed": count_today, "entries_placed": len(entries_today),
-                  "loss_at_risk": round(loss_today, 2), "day_trades_5d": pdt_n if c.get("pdt_guard") else None},
+        "account": {"balance": view["balance"], "capital": capital, "open_positions": len(view["open"]),
+                    "entries_today": view["entries_today"], "realised_today": view["realised_today"],
+                    "realised_week": view["realised_week"], "open_risk": view["open_risk"],
+                    "week_from": view["week_from"], "paused": paused},
     }
-
-
-def _pct(x):
-    x = float(x)
-    return str(int(x)) if x == int(x) else ("%.2f" % x)
-
-
-def _num(x):
-    x = float(x)
-    return str(int(x)) if x == int(x) else ("%.4f" % x).rstrip("0")
 
 
 def report(res):
@@ -722,31 +590,31 @@ def report(res):
     if res["warnings"]:
         lines.append("")
     for r in res["results"]:
-        lines.append("%-5s #%d %s %s %s, %s" % (r["verdict"], r["index"], r["side"], r["symbol"], r["amount"],
-                                                r["kind"]))
+        lines.append("%-5s #%d %s %s %s shares, %s" % (r["verdict"], r["index"], r["side"], r["symbol"],
+                                                      r["qty"] if r["qty"] is not None else "?", r["kind"]))
         for x in r.get("info", []):
             lines.append("          " + x)
         for x in r["reasons"]:
             lines.append("        - " + x)
         for x in r["warnings"]:
             lines.append("        ~ " + x)
+    a = res["account"]
     lines.append("")
-    lines.append("%d passed, %d blocked at %s New York. Cash after the passed orders: %s (%s account)."
-                 % (res["pass"], res["block"], res["now_new_york"], money(res["cash_after"]),
-                    "paper" if res["paper"] else "LIVE"))
+    lines.append("%d passed, %d blocked at %s India time, %s mode. Account %s (capital %s)."
+                 % (res["pass"], res["block"], res["now_india"], res["mode"].upper(), inr(a["balance"], True),
+                    inr(a["capital"])))
     if res["block"]:
-        lines.append("Blocked orders do not go to the broker. Fix the order or your rules, then check again.")
+        lines.append("A blocked order goes nowhere. Fix the order (fewer shares, a better plan) or skip the trade. "
+                     "Never loosen a limit to make it pass.")
     else:
-        lines.append("Every order passed. trader-broker still asks you yes or no for each one.")
+        lines.append("Every order passed. A PASS is a rules check, not a recommendation: trader-broker still asks "
+                     "you yes or no for each one.")
     lines.append("Education and tooling, not financial advice.")
     return "\n".join(lines)
 
 
 def load_prices(pdoc):
-    """prices.json -> ({SYM: price}, {SYM: price time as naive UTC or None}).
-
-    The price time is the quote's own time (detail.time), else when it was fetched
-    (detail.fetched), else the file's as_of."""
+    """prices.json -> ({SYM: price}, {SYM: price time as naive UTC or None})."""
     if not isinstance(pdoc, dict):
         return {}, {}
     prices = pdoc.get("prices", pdoc)
@@ -769,12 +637,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Check proposed orders against your limits (trader-risk).")
     ap.add_argument("--orders", default="trader/orders.json")
     ap.add_argument("--config", default="trader/config.json")
-    ap.add_argument("--portfolio", default="trader/portfolio.json",
-                    help="your account; if missing, a fresh account funded with the budget")
+    ap.add_argument("--ledger", help="account ledger (default trader/state/<mode>.json)")
     ap.add_argument("--prices", default="trader/prices.json")
-    ap.add_argument("--state", default="trader/state/broker.json", help="what trader-broker placed today")
-    ap.add_argument("--now", help="pretend it is this New York time, e.g. \"2026-10-19 10:15\"")
-    ap.add_argument("--today", help="YYYY-MM-DD (default: today in New York)")
+    ap.add_argument("--kite-state", default="trader/state/kite.json", help="the Kite connection check (live mode)")
+    ap.add_argument("--now", help="pretend it is this India time, e.g. \"2026-10-30 09:51\"")
+    ap.add_argument("--today", help="YYYY-MM-DD (default: today in India)")
     ap.add_argument("--out", default="trader/state/risk.json", help="where the verdicts are recorded")
     ap.add_argument("--no-write", action="store_true", help="do not record the verdicts")
     ap.add_argument("--json", action="store_true")
@@ -782,36 +649,35 @@ def main(argv=None):
     try:
         now = parse_now(a.now)
         if a.today and not re.match(r"^\d{4}-\d{2}-\d{2}$", a.today):
-            raise RiskError("--today wants a date like 2026-10-19")
+            raise RiskError("--today wants a date like 2026-10-30")
         doc = read_json(a.orders, "orders file (run trader-budget first)")
         orders = doc.get("orders", doc) if isinstance(doc, dict) else doc
         if not isinstance(orders, list) or not orders:
             raise RiskError("no orders in %s" % a.orders)
         cfg = read_json(a.config, "config", required=False) or {}
-        portfolio = read_json(a.portfolio, "portfolio", required=False)
+        mode = str(cfg.get("mode") or "paper").lower()
+        ledger = read_json(a.ledger or "trader/state/%s.json" % ("live" if mode == "live" else "paper"),
+                           "ledger", required=False)
         pdoc = read_json(a.prices, "prices", required=False) or {}
         prices, times = load_prices(pdoc)
-        state = read_json(a.state, "broker state", required=False)
-        res = check(orders, cfg, portfolio, prices, state, a.today, now, times)
-        if pdoc.get("as_of"):
-            res["prices_as_of"] = pdoc["as_of"]
+        kite_state = read_json(a.kite_state, "kite state", required=False)
+        res = check(orders, cfg, ledger, prices, kite_state, a.today, now, times)
         if not a.no_write:
             d = os.path.dirname(a.out)
             if d:
                 os.makedirs(d, exist_ok=True)
             rec = dict(res)
-            rec["checked_at"] = datetime.datetime.now(datetime.timezone.utc).replace(
-                microsecond=0, tzinfo=None).strftime("%Y-%m-%dT%H:%M:%SZ")
+            rec["checked_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
             rec["orders_file"] = a.orders
             tmp = a.out + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(rec, fh, indent=2)
+                json.dump(rec, fh, indent=2, ensure_ascii=False)
                 fh.write("\n")
             os.replace(tmp, a.out)
     except RiskError as e:
         print("check.py: %s" % e, file=sys.stderr)
         return 1
-    print(json.dumps(res, indent=2) if a.json else report(res))
+    print(json.dumps(res, indent=2, ensure_ascii=False) if a.json else report(res))
     return 1 if res["block"] else 0
 
 

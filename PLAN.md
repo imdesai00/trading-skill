@@ -78,16 +78,37 @@ after the checks in VERIFY.md. Nothing in the skills has been changed yet.
 
 ## Phases (I stop after each, run the tests and show you the results)
 
-1. Verification -> VERIFY.md -> this plan. **(done, waiting for your OK)**
+1. Verification -> VERIFY.md -> this plan. **(done; OK given 2026-10-29: flat_by 15:00, branch, stop design)**
 2. Core pipeline: scanner, entry, exit, timemachine, budget, risk, alerts; IST,
-   NSE calendar with CAS, tick sizes, ₹ formatting, your limits.
+   NSE calendar with CAS, tick sizes, ₹ formatting, your limits. **(done)** Also
+   moved in from later phases because the tests needed them: the charges
+   calculator and trader-broker's ticket.py (the yes gate) on the new order format.
 3. Paper broker, charges calculator, end-of-day reconcile, skipped signals.
 4. Notion setup, outbox sync, rebuild, daily summary, weekly report.
 5. Kite adapter (disabled, mock-tested) + golive.py check / steps.
 6. News (Yahoo .NS + NSE RSS if reachable), analyst (pasted results), insider (NSE PIT RSS).
 7. README for India, worked example on real NSE data, full test run, summary.
 
-## What I need from you before Phase 2
+## Changes made in Phase 2 (say no to any of them)
+
+- **Slippage counts in your limits.** `limits_include_slippage: true` counts the
+  paper slippage (0.05 % a side) in the ₹500 max loss and the 1.5 reward:risk.
+  Without it, a trade sized to exactly ₹500 loses about ₹563 at the stop in the
+  paper record. Consequence: a 2R plan on a ₹1,400 stock with an ₹8 risk is about
+  1.2R after slippage and charges, so most trades need a 3R target to pass.
+- **The live stop is SL-M** (config `stop_order_type`; `SL` is the alternative).
+- **Yahoo's spark batch endpoint is dropped** for one chart request per symbol.
+- **trader-budget's weights mode (the US 13F split) is removed:** it made plain
+  buys with no stop, which your rules block anyway.
+- **Upstream's 24 committed `.pyc` files are removed** and `.gitignore` added.
+- **Tests:** 315 upstream, 236 now. The difference is tests of removed US
+  features (Nasdaq Trader symbol files, spark, NYSE early closes and daylight
+  saving, Alpaca bracket orders, PDT, options and crypto symbols, weights mode).
+  The upstream tests of logic that still exists (verdict thresholds, seeds,
+  stale data, a wick vs a close, a dozing computer, network retries) were ported.
+  News, analyst and Pelosi tests are untouched until Phase 6.
+
+## What I needed from you before Phase 2 (answered)
 
 1. **`flat_by` 15:10 vs Zerodha's 15:12 forced square-off for CAS stocks.**
    Nearly all NIFTY 100 stocks are CAS stocks, so continuous trading for them

@@ -39,7 +39,7 @@ class Repo(unittest.TestCase):
         self.assertEqual(found, sorted(SKILLS))
 
     def test_root_matches_the_reel(self):
-        root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git"))
+        root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git") and d != "__pycache__")
         self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "PLAN.md", "README.md", "VERIFY.md", "tests"] + SKILLS))
 
     def test_frontmatter_name_and_description(self):
@@ -121,18 +121,85 @@ class Repo(unittest.TestCase):
     def test_day_trading_limits_ship_in_the_example_config(self):
         with open(os.path.join(ROOT, "trader-budget", "config.example.json")) as fh:
             cfg = json.load(fh)
-        for k in ("max_loss_per_trade_usd", "max_daily_loss_usd", "max_trades_per_day",
-                  "min_reward_risk", "require_stop", "no_entries_after", "flat_by"):
-            self.assertIn(k, cfg, k)
-        self.assertIs(cfg["require_stop"], True)
-        self.assertIs(cfg.get("allow_short", False), False)
-        self.assertIs(cfg.get("allow_margin", False), False)
+        want = {"capital_inr": 100000, "max_loss_per_trade_inr": 500, "max_daily_loss_inr": 1500,
+                "max_weekly_loss_inr": 4000, "max_drawdown_pause_inr": 8000, "max_trades_per_day": 3,
+                "max_open_positions": 1, "max_position_value_inr": 75000, "cash_buffer_pct": 10,
+                "min_reward_risk": 1.5, "max_charges_pct_of_target": 25, "allow_margin": False,
+                "allow_short": False, "no_entries_before": "09:30", "no_entries_after": "14:45",
+                "flat_by": "15:00", "paper_slippage_pct": 0.05, "paper_period_weeks": 4,
+                "min_trades_for_review": 40, "require_stop": True, "product": "MIS", "exchange": "NSE"}
+        for k, v in want.items():
+            self.assertEqual(cfg.get(k), v, k)
 
     def test_paper_trading_is_the_default(self):
         with open(os.path.join(ROOT, "trader-budget", "config.example.json")) as fh:
             cfg = json.load(fh)
-        self.assertIs(cfg["paper"], True)
-        self.assertIs(cfg.get("allow_options", False), False)
+        self.assertEqual(cfg["mode"], "paper")
+        self.assertIs(cfg["kite_enabled"], False)
+
+
+class Fixtures(unittest.TestCase):
+    def test_the_synthetic_fixtures_rebuild_byte_for_byte(self):
+        import importlib.util
+        import shutil
+        import tempfile
+        src = os.path.join(ROOT, "tests", "fixtures", "nse")
+        d = tempfile.mkdtemp()
+        try:
+            shutil.copy(os.path.join(src, "make_synthetic.py"), d)
+            spec = importlib.util.spec_from_file_location("make_synthetic", os.path.join(d, "make_synthetic.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            for path in mod.build():
+                rel = os.path.relpath(path, d)
+                with open(path, "rb") as a, open(os.path.join(src, rel), "rb") as b:
+                    self.assertEqual(a.read(), b.read(), rel)
+        finally:
+            shutil.rmtree(d)
+
+    def test_every_synthetic_chart_says_so(self):
+        import gzip
+        for base, _, files in os.walk(os.path.join(ROOT, "tests", "fixtures", "nse")):
+            for f in files:
+                if f.endswith((".json", ".json.gz")):
+                    opener = gzip.open if f.endswith(".gz") else open
+                    with opener(os.path.join(base, f), "rt", encoding="utf-8") as fh:
+                        meta = json.load(fh)["chart"]["result"][0]["meta"]
+                    self.assertIs(meta.get("synthetic"), True, f)
+                    self.assertTrue(meta["symbol"].startswith("SYNTH"), f)
+
+    def test_capture_writes_the_layout(self):
+        import importlib.util
+        import tempfile
+        import shutil
+        spec = importlib.util.spec_from_file_location("capture", os.path.join(ROOT, "tests", "capture.py"))
+        cap = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cap)
+        d = tempfile.mkdtemp()
+        try:
+            urls = []
+            done = cap.capture(["M&M"], d, get=lambda u: urls.append(u) or b"{}", sleep=lambda s: None)
+            self.assertEqual(len(done), 3)
+            self.assertIn("/chart/M%26M.NS?range=60d&interval=5m", urls[0])
+            self.assertTrue(os.path.exists(os.path.join(d, "1m-5d", "M&M.json.gz")))
+            with open(os.path.join(d, "CAPTURED.txt")) as fh:
+                self.assertEqual(len(fh.read().splitlines()), 3)
+        finally:
+            shutil.rmtree(d)
+
+
+class Secrets(unittest.TestCase):
+    def test_gitignore_keeps_state_and_secrets_out(self):
+        with open(os.path.join(ROOT, ".gitignore")) as fh:
+            lines = fh.read().splitlines()
+        for want in ("trader/", ".env", "claude_desktop_config.json", "__pycache__/"):
+            self.assertIn(want, lines)
+
+    def test_no_file_looks_like_it_holds_a_key(self):
+        pat = re.compile(r"(api_secret|access_token|api_key)\s*[=:]\s*['\"][A-Za-z0-9]{12,}['\"]", re.I)
+        for path in every_text_file():
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                self.assertIsNone(pat.search(fh.read()), os.path.relpath(path, ROOT))
 
 
 if __name__ == "__main__":
