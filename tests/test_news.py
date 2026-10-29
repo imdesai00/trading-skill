@@ -188,6 +188,27 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(code, 1)                                  # nothing NEW, though --all lists the old ones
         self.assertIn("Synthetic Beta shares jump on block deal", out)
 
+    def test_results_today_is_saved_for_risk_and_budget_to_read(self):
+        self.run_news()
+        with open(os.path.join(self.d, "state", "results_today.json"), encoding="utf-8") as fh:
+            doc = json.load(fh)
+        self.assertEqual(doc["date"], "2026-10-30")
+        self.assertEqual(list(doc["symbols"]), ["SYNTHA"])
+
+    def test_news_items_are_logged_in_the_database_when_there_is_one(self):
+        import sqlite3
+        db = load("trader-db", "db")
+        db.init(os.path.join(self.d, "trader.db"))
+        self.run_news()
+        conn = sqlite3.connect(os.path.join(self.d, "trader.db"))
+        try:
+            n = conn.execute("SELECT COUNT(*) FROM news_items").fetchone()[0]
+            self.assertGreaterEqual(n, 5)
+            self.run_news("--all")
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM news_items").fetchone()[0], n)      # logged once
+        finally:
+            conn.close()
+
     def test_dry_run_leaves_no_state(self):
         self.run_news("--dry-run")
         self.assertFalse(os.path.exists(self.state))

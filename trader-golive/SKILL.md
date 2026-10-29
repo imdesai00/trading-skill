@@ -87,6 +87,11 @@ It never decides, never recommends going live, never edits `trader/config.json`,
 never sets `mode` or `kite_enabled`, never connects to Kite, and never asks for
 a key, secret or token.
 
+## Added (database edition)
+
+`golive.py check` reads the database when there is one (`--mode paper` by default; `--mode live` reports the live record
+on its own). Paper and live are never added together. The first 2 live weeks run at 50% of normal risk automatically.
+
 ## Safety
 
 - Education and tooling, not financial advice. A PASS is a rules check, not a recommendation.

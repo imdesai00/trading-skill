@@ -159,3 +159,7 @@ after the checks in VERIFY.md. Nothing in the skills has been changed yet.
 ## Final test count
 
 See the last commit message and the README. Phase 6 replaced the US news, SEC-facts and Pelosi tests with tests of the NSE news monitor, the results reader and the insider tracker.
+
+## Second pass (2026-10-29): the full specification
+
+You sent a fuller specification (SQLite as the source of truth, percent limits, capital and kill-switch control, India protections, Kite live checks and reconcile, nine Notion databases, docs). It was audited against the build: see docs/AUDIT.md. The gaps were filled in this order: database (trader-db), controls (trader-control), protections (guards.py in risk, budget and scanner), Notion extension, live additions, docs.

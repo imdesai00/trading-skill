@@ -28,6 +28,10 @@ import random
 import re
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import db  # noqa: E402  (a copy of trader-db/db.py; a test keeps the copies identical)
+
 DEFAULTS = {"capital_inr": 100000, "max_loss_per_trade_inr": 500, "max_daily_loss_inr": 1500,
             "max_weekly_loss_inr": 4000, "max_drawdown_pause_inr": 8000, "max_trades_per_day": 3,
             "min_trades_for_review": 40, "paper_period_weeks": 4}
@@ -347,7 +351,13 @@ def steps_lines(half_risk=250):
 
 def cmd_check(a):
     cfg = read_json(a.config, "config", required=False) or {}
-    led = read_json(a.ledger, "paper ledger (the paper broker writes it)")
+    sqlite_path = a.sqlite or db.default_path(a.config)
+    if db.exists(sqlite_path):
+        led = db.load_ledger(sqlite_path, a.mode, cfg)            # the database is the record
+        if not led["trades"]:
+            raise GoLiveError("the database holds no %s trades yet" % a.mode)
+    else:
+        led = read_json(a.ledger or "trader/state/%s.json" % a.mode, "%s ledger (the paper broker writes it)" % a.mode)
     res = analyse(led, cfg)
     if a.json:
         res = dict(res)
@@ -371,7 +381,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Go-live readiness (trader-golive). Never decides, never switches.")
     sub = ap.add_subparsers(dest="cmd")
     p = sub.add_parser("check", help="the honest report on the paper record")
-    p.add_argument("--ledger", default="trader/state/paper.json")
+    p.add_argument("--ledger", help="default trader/state/<mode>.json (used when there is no database)")
+    p.add_argument("--sqlite", help="the database (default trader/trader.db, next to the config)")
+    p.add_argument("--mode", choices=["paper", "live"], default="paper",
+                   help="paper and live are always reported separately")
     p.add_argument("--config", default="trader/config.json")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("steps", help="the steps you take yourself to go live")

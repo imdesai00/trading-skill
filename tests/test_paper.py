@@ -173,7 +173,7 @@ class Cli(unittest.TestCase):
 
     def test_the_whole_day(self):
         self.risk()
-        self.assertEqual(self.tk("approve", "--index", "1", "--reply", "yes", "--now", "2026-10-30 09:51:20")[0], 0)
+        self.assertEqual(self.tk("approve", "--index", "1", "--reply", "yes", "--why", "orb breakout, news clear", "--now", "2026-10-30 09:51:20")[0], 0)
         code, out, _ = self.pp("open", "2026-10-30 09:51:30", "--index", "1")
         self.assertEqual(code, 0)
         self.assertIn("Booked paper trade PT-20261030-01", out)
@@ -227,7 +227,7 @@ class Cli(unittest.TestCase):
 
     def test_a_yes_to_the_exit_closes_at_the_next_bar(self):
         self.risk()
-        self.tk("approve", "--index", "1", "--reply", "yes", "--now", "2026-10-30 09:51:20")
+        self.tk("approve", "--index", "1", "--reply", "yes", "--why", "orb breakout, news clear", "--now", "2026-10-30 09:51:20")
         self.pp("open", "2026-10-30 09:51:30", "--index", "1")
         exit_order = {"symbol": "SYNTHA", "exchange": "NSE", "side": "sell", "qty": 45, "product": "MIS",
                       "entry_type": "market"}

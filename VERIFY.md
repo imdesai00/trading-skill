@@ -266,6 +266,26 @@ None of these could be fetched from the build sandbox. Every fixture for them is
 
 No real NSE, Yahoo, Moneycontrol, Zerodha or Notion call was made by the tests. Real calls happen first on your machine. The first things to look at: `scan.py universe` (did the CSVs download and parse?), one `entry.py check` on a real symbol after 09:35, `news.py` (which of the three feeds answered?), the first Notion sync (did the database schema create?), and `alerts.py quote RELIANCE` against Kite's price. `tests/capture.py` saves real Yahoo bars so the synthetic fixtures can be replaced.
 
+## 14. Protection data, expiry day and the Kite order-read figures (database edition, 2026-10-29)
+
+Searched on 2026-10-29. The sandbox could not open any of these sites, so none was fetched; every line is SECONDARY or UNVERIFIED.
+
+| item | what the code assumes | status |
+| --- | --- | --- |
+| Price bands (circuit limits) | NSE publishes a "Complete List of Price Bands" CSV: a third-party project lists `https://nsearchives.nseindia.com/content/equities/sec_list_ddmmyyyy.csv`; NSE's daily price bands page offers it. `scan.py protect --bands FILE` reads a CSV you download, finding the symbol and band columns by name, "No Band" meaning none. A circuit price is yesterday's close x (1 +/- band%). | UNVERIFIED URL and columns. Stocks with derivatives have no stock-level band. |
+| ASM / GSM lists | NSE's reports pages (nseindia.com/reports/gsm and the ASM page) publish them. No official CSV link was found; circulars are PDFs. `scan.py protect --asm FILE --gsm FILE` reads a list of symbols you export or copy into a file. | UNVERIFIED. No automatic download is built, on purpose (NSE's site needs a browser session). |
+| MIS-eligible list | Zerodha publishes its margin and MIS list on its website (the margin calculator). No machine-readable official source was found. `scan.py protect --mis FILE` reads a symbol list you export. | UNVERIFIED. If a stock is not on it, the broker refuses the MIS order. |
+| NIFTY weekly expiry day | Tuesday since the September 2025 contracts (NSE revised it from Thursday; sources differ on the exact start date and circular number). Configurable: `index_expiry_weekday` (Monday is 0). | SECONDARY (news and broker blogs), not read from the NSE circular. |
+| Union Budget day | 1 February by default (`budget_day`, "02-01"). The real date is announced each year. | Assumption. |
+| RBI policy days | Not built in. Put them in `trader/state/events.json` or `event_days` in the config yourself. | You maintain them. |
+| India VIX and NIFTY on Yahoo | `^INDIAVIX` and `^NSEI` v8 chart symbols; the gap is the first 5-minute bar's open against the chart's previous close. | UNVERIFIED symbols. `scan.py market --vix X --gap Y` types them in. |
+| Kite `get_ltp` result | `{"NSE:SYMBOL": {"last_price": x}}`, as in the Kite Connect quote API. | UNVERIFIED for the MCP server's own output; the reader also accepts `{"SYMBOL": x}`. RECHECK-AT-KITE. |
+| Kite `get_margins` result | `equity.available.live_balance` (else `cash`, else `net`), as in the Kite Connect margins API. | UNVERIFIED for the MCP output. RECHECK-AT-KITE. |
+| Kite `get_positions` result | `{"net": [{"tradingsymbol", "product", "quantity"}]}`. | UNVERIFIED for the MCP output. RECHECK-AT-KITE. |
+| Whether Claude can confirm "Needs approval" | A script cannot read Claude's tool-permission settings. `kite.py check` therefore refuses to verify until you pass `--tools-need-approval` yourself. | By design. |
+| Contract-note charges | Entered by hand: `kite.py set-charges`. No contract-note parser is built. | Not built. |
+| Cover orders and GTT for MIS | Still unverified (section 2). The live design is entry, a resting SL-M stop after the fill, and a new order for the target or flat-by. A target is not a resting order. | Different from "CO or GTT OCO" in your spec; see docs/AUDIT.md. |
+
 ## Items to re-check when you connect Kite (RECHECK-AT-KITE)
 
 1. Whether the hosted `mcp.kite.trade` exposes `place_order` / `modify_order` / `cancel_order` (assumed: no).
@@ -280,3 +300,7 @@ No real NSE, Yahoo, Moneycontrol, Zerodha or Notion call was made by the tests. 
 10. Tick size per symbol from Kite's instrument list, against the NSE band table.
 11. Whether `SL-M` (with `market_protection`) is accepted for an NSE equity MIS stop-loss sell; if not, set
     `"stop_order_type": "SL"` in your config.
+12. The real shapes of the MCP `get_ltp`, `get_margins` and `get_positions` results (section 14): the 0.3% price check,
+    the cash check, `kite.py check` and `kite.py reconcile` read them.
+13. Whether the Kite MCP server you use returns order, trade and position fields with the names the adapter reads
+    (`order_id`, `status`, `average_price`, `filled_quantity`, `tradingsymbol`, `transaction_type`, `quantity`).

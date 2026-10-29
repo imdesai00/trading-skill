@@ -42,6 +42,10 @@ import os
 import re
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import db  # noqa: E402  (a copy of trader-db/db.py; a test keeps the copies identical)
+
 NEUTRAL_FIELDS = ("symbol", "exchange", "side", "qty", "product", "entry_type", "limit_price", "stop", "target",
                   "action", "order_ref")
 YES_WORDS = ("yes", "y")
@@ -474,14 +478,27 @@ def cmd_approve(a):
         return 1
     loss, stop = max_loss(order)
     mode = mode_of(cfg)
+    entry = kind_of(order, rv) == "entry"
+    if entry:
+        blocks = db.control_blocks(a.config, mode, today, db.default_path(a.state))
+        if blocks:
+            raise TicketError("; ".join(blocks))
+        if not (a.why or "").strip():
+            raise TicketError("before the yes, ask the user: \"Why are you taking this trade?\" and pass their "
+                              "answer with --why \"...\". It is stored with the trade.")
     rec = {"at": ist_iso(now), "date": today, "index": a.index, "fingerprint": fingerprint(order),
            "symbol": str(order.get("symbol", "")).upper(), "side": order.get("side"),
            "qty": order.get("qty"), "kind": kind_of(order, rv), "max_loss": loss, "stop": stop,
            "plain": plain(order), "status": "approved", "reply": a.reply, "mode": mode}
+    if (a.why or "").strip():
+        rec["why"] = a.why.strip()
     if mode == "live":
         import kite
         rec["payload_hash"] = kite.payload_hash(kite.build_call(order, cfg))
     state.setdefault("orders", []).append(rec)
+    dbp = db.default_path(a.state)
+    if db.exists(dbp):
+        db.record_decision(dbp, rec, order, rec.get("why"), now)      # the permanent, tamper-evident record
     write_json(a.state, state)
     print("Recorded your yes for order %d: %s." % (a.index, plain(order)))
     if mode == "paper":
@@ -502,6 +519,9 @@ def cmd_decline(a):
            "symbol": str(order.get("symbol", "")).upper(), "side": order.get("side"),
            "plain": plain(order), "status": "declined", "reply": a.reply or "no", "mode": mode_of(cfg)}
     state.setdefault("orders", []).append(rec)
+    dbp = db.default_path(a.state)
+    if db.exists(dbp):
+        db.record_decision(dbp, rec, None, None, now)
     write_json(a.state, state)
     print("Recorded: you said no to order %d (%s). Nothing was sent." % (a.index, plain(order)))
     return 0
@@ -588,6 +608,7 @@ def main(argv=None):
     common(p)
     p.add_argument("--index", type=int, required=True)
     p.add_argument("--reply", required=True, help="the user's reply, word for word")
+    p.add_argument("--why", help="the user's answer to \"Why are you taking this trade?\" (required for entries)")
     p = sub.add_parser("decline", help="record a no")
     common(p)
     p.add_argument("--index", type=int, required=True)

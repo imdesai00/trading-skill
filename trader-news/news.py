@@ -597,6 +597,52 @@ def _json_ready(items):
     return out
 
 
+def save_results_today(state_path, warnings, now_utc):
+    """trader/state/results_today.json: who reports results today. trader-risk and trader-budget read it (half size)."""
+    day = to_ist(now_utc).date().isoformat()
+    path = os.path.join(os.path.dirname(os.path.abspath(state_path)), "results_today.json")
+    doc = {"date": day, "symbols": {}}
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                old = json.load(fh)
+            if old.get("date") == day:
+                doc["symbols"] = dict(old.get("symbols") or {})
+        except ValueError:
+            pass
+    doc["symbols"].update(warnings)
+    if not doc["symbols"] and not os.path.isfile(path):
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+
+
+def log_items(state_path, items, now_utc):
+    """Record the items in trader/trader.db (the news_items table) when the database exists. A failure is shown."""
+    d = os.path.dirname(os.path.abspath(state_path))
+    if os.path.basename(d) == "state":
+        d = os.path.dirname(d)
+    path = os.path.join(d, "trader.db")
+    if not items or not os.path.isfile(path):
+        return
+    try:
+        import sqlite3
+        conn = sqlite3.connect(path, timeout=30)
+        try:
+            for it in items:
+                conn.execute("INSERT OR IGNORE INTO news_items (item_hash, at, source, symbol, title, tags, link) "
+                             "VALUES (?,?,?,?,?,?,?)",
+                             (fingerprint(it), (it["time"] or now_utc).strftime("%Y-%m-%dT%H:%M:%SZ"), it["source"],
+                              ",".join(it["touches"] or it["possible"]), it["title"], ",".join(it["tags"]), it["link"]))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print("WARNING: could not log the news to %s: %s" % (path, e), file=sys.stderr)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--symbols", nargs="*", help="NSE symbols; default: watchlist + plan + portfolio")
@@ -661,6 +707,8 @@ def main(argv=None):
     else:
         sys.stdout.write(render(shown, errors, now, moves, args.move_pct, warnings))
     if not args.dry_run:
+        save_results_today(args.state, warnings, now)
+        log_items(args.state, items, now)
         remember(items, state, now)
         folder = os.path.dirname(args.state)
         if folder:

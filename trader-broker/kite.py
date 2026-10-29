@@ -53,11 +53,14 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import charges as chg  # noqa: E402  (a copy of trader-budget/charges.py; a test keeps the copies identical)
+import db  # noqa: E402  (a copy of trader-db/db.py; a test keeps the copies identical)
 
 NEUTRAL_FIELDS = ("symbol", "exchange", "side", "qty", "product", "entry_type", "limit_price", "stop", "target",
                   "action", "order_ref")
 TOOLS = {"profile": "get_profile", "orders": "get_orders", "positions": "get_positions", "trades": "get_trades",
-         "place": "place_order", "cancel": "cancel_order"}
+         "place": "place_order", "cancel": "cancel_order", "ltp": "get_ltp", "margins": "get_margins",
+         "holdings": "get_holdings"}
+PRICE_MOVE_PCT = 0.3     # a live price this far from the planned entry means: new risk check, new yes
 DEFAULT_STOP_TYPE = "SL-M"
 DEFAULT_SLIPPAGE = 0.05
 
@@ -337,6 +340,35 @@ def latest(state, fp, today):
 
 # ---------------------------------------------------------------- the adapter
 
+def last_price(ltp, sym):
+    """The last traded price for `sym` from a get_ltp result: {"NSE:SYM": {"last_price": x}} or {"SYM": x}."""
+    doc = ltp.get("data", ltp) if isinstance(ltp, dict) else {}
+    for key in ("NSE:%s" % sym, sym):
+        v = doc.get(key)
+        if isinstance(v, dict):
+            v = v.get("last_price", v.get("ltp"))
+        if v is not None:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def available_cash(margins):
+    """Spendable equity cash from a get_margins result (equity.available.live_balance, else cash, else net)."""
+    doc = margins.get("data", margins) if isinstance(margins, dict) else {}
+    eq = doc.get("equity", doc) if isinstance(doc, dict) else {}
+    av = eq.get("available", {}) if isinstance(eq, dict) else {}
+    for src, key in ((av, "live_balance"), (av, "cash"), (eq, "net")):
+        try:
+            if src.get(key) is not None:
+                return float(src[key])
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return None
+
+
 class KiteAdapter(object):
     """All the live-order logic. `call(tool, arguments)` performs one Kite MCP tool call and returns its result;
     in real use Claude is the caller (see the CLI), in the tests it is a fake Kite."""
@@ -358,9 +390,41 @@ class KiteAdapter(object):
         if not ok:
             raise KiteDisabled(why)
 
+    def db_path(self):
+        return os.path.join(self.base, "trader.db")
+
+    def store(self):
+        cfg = self.cfg
+        return db.LedgerStore(self.p("state", "live.json"), self.db_path(), "live", cfg,
+                              lambda c: new_live_ledger(c), lambda q: read_json(q, "live ledger", required=False),
+                              write_json, "kite")
+
+    def load_live(self):
+        st = self.store()
+        led = st.load()
+        led.setdefault("trades", [])
+        led.setdefault("skipped", [])
+        return st, led
+
+    def event(self, order, status, broker_id=None, detail=None):
+        """Append an order_events row when the database exists."""
+        if not db.exists(self.db_path()):
+            return
+        oid = db.order_for_fingerprint(self.db_path(), fingerprint(order), self.today, "live")
+        if oid:
+            db.record_order_event(self.db_path(), oid, status, broker_id, detail, self.now)
+
+    @staticmethod
+    def is_entry(order):
+        return str(order.get("side")) == "buy" and not order.get("action") and order.get("entry_type") != "stop"
+
     def check_gates(self, order):
         """Everything that must be true before this order may be placed. Returns the approval record."""
         self.require_enabled()
+        if self.is_entry(order):
+            blocks = db.control_blocks(self.p("config.json"), "live", self.today, self.db_path())
+            if blocks:
+                raise KiteError("; ".join(blocks))
         fp = fingerprint(order)
         risk = self._state("risk.json")
         if not risk or risk.get("date") != self.today or str(risk.get("mode")) != "live":
@@ -387,10 +451,54 @@ class KiteAdapter(object):
             raise KiteError("an order with this order's tag is already at Kite: it was placed once. Check "
                             "get_orders instead of placing it again")
 
+    def void_yes(self, order, why):
+        """Use the yes up without placing anything: the price moved, so the user must be asked again."""
+        state = self._state("broker.json") or {"orders": []}
+        rec = latest(state, fingerprint(order), self.today)
+        if rec and rec.get("status") == "approved":
+            new = dict(rec, status="voided", note=why,
+                       at="%s+05:30" % to_ist(self.now).replace(microsecond=0).isoformat())
+            state["orders"].append(new)
+            write_json(self.p("state", "broker.json"), state)
+        self.event(order, "cancelled", None, why)
+
+    def check_live_price(self, order, ltp):
+        """Use Kite's live price, not Yahoo's. More than PRICE_MOVE_PCT from the planned entry: new check, new yes."""
+        sym = str(order.get("symbol", "")).upper()
+        px = last_price(ltp, sym) if ltp is not None else None
+        if px is None:
+            raise KiteError("no live price for %s: call get_ltp and pass it (prepare --ltp FILE). Entries are "
+                            "never placed on Yahoo's price alone." % sym)
+        ref = _f(order.get("limit_price")) or _f((order.get("plan") or {}).get("entry"))
+        if not ref:
+            raise KiteError("the order has no planned entry to compare the live price with")
+        limit = float(self.cfg.get("live_price_move_pct", PRICE_MOVE_PCT))
+        moved = (px - ref) / ref * 100.0
+        if abs(moved) > limit + 1e-9:
+            why = "Kite's last price %.2f is %+.2f%% from the planned entry %.2f (limit %.2f%%)" % (px, moved, ref, limit)
+            self.void_yes(order, why)
+            raise KiteError("%s. Nothing was placed and this yes is used up: save the price (kite.py prices --ltp "
+                            "FILE), run trader-risk check.py again, and ask for a new yes." % why)
+        return px
+
+    def check_margin(self, order, margins, px):
+        cash = available_cash(margins) if margins is not None else None
+        if cash is None:
+            raise KiteError("no margin figures: call get_margins and pass them (prepare --margins FILE). The "
+                            "available cash must cover the whole order: leverage is off.")
+        need = int(order["qty"]) * (px or 0)
+        if need > cash + 0.005:
+            raise KiteError("Kite shows %s available and this order needs %s (leverage is off): nothing placed"
+                            % (inr(cash, True), inr(need, True)))
+        return cash
+
     # -- the three steps
-    def prepare(self, order, open_orders):
+    def prepare(self, order, open_orders, ltp=None, margins=None):
         rec, call, rv = self.check_gates(order)
         self.refuse_duplicates(call, open_orders)
+        if self.is_entry(order):
+            px = self.check_live_price(order, ltp)
+            self.check_margin(order, margins, px)
         return call
 
     def record(self, order, order_id=None, status="placed", note=None, trade_ref=None):
@@ -413,6 +521,7 @@ class KiteAdapter(object):
             new["note"] = note
         state["orders"].append(new)
         write_json(self.p("state", "broker.json"), state)
+        self.event(order, status, str(order_id) if order_id else None, note)
         if status == "placed":
             self._book(order, str(order_id), rec, trade_ref)
         return new
@@ -424,7 +533,11 @@ class KiteAdapter(object):
         if self.call is None:
             raise KiteError("no Kite caller: in Claude, use prepare then record")
         open_orders = self.call(TOOLS["orders"], {})
-        call = self.prepare(order, open_orders)
+        ltp = margins = None
+        if self.is_entry(order):
+            ltp = self.call(TOOLS["ltp"], {"instruments": ["NSE:%s" % str(order.get("symbol", "")).upper()]})
+            margins = self.call(TOOLS["margins"], {})
+        call = self.prepare(order, open_orders, ltp, margins)
         try:
             res = self.call(call["tool"], call["arguments"])
         except Exception as e:  # a failed order is not retried without a new check and a new yes
@@ -439,7 +552,7 @@ class KiteAdapter(object):
 
     # -- the live ledger
     def _book(self, order, order_id, rec, trade_ref):
-        led = load_ledger(self.p("state", "live.json"), self.cfg)
+        st, led = self.load_live()
         sym = str(order.get("symbol", "")).upper()
         if order.get("action") == "cancel":
             t = self._trade(led, sym)
@@ -458,7 +571,10 @@ class KiteAdapter(object):
                 "risk_at_stop": _f(plan.get("max_loss")), "tm_odds": None, "risk_verdict": "PASS",
                 "news_tags": [], "approval": rec.get("reply"), "approved_at": rec.get("at"), "mode": "live",
                 "status": "pending_fill", "balance_after": None, "notes": "", "fingerprint": fingerprint(order),
-                "entry_order_id": order_id, "stop_order_id": None, "exit_order_id": None})
+                "entry_order_id": order_id, "stop_order_id": None, "exit_order_id": None,
+                "why": rec.get("why"), "charges_kind": None,
+                "order_id": db.order_for_fingerprint(self.db_path(), fingerprint(order), self.today, "live")
+                if db.exists(self.db_path()) else None, "broker_order_id": order_id})
         elif order.get("entry_type") == "stop":
             t = self._trade(led, sym)
             if t:
@@ -468,7 +584,7 @@ class KiteAdapter(object):
             if t:
                 t["exit_order_id"] = order_id
                 t["exit_reason_hint"] = (order.get("plan") or {}).get("reason") or trade_ref
-        write_json(self.p("state", "live.json"), led)
+        st.save(led, self.now)
 
     @staticmethod
     def _trade(led, sym):
@@ -478,7 +594,7 @@ class KiteAdapter(object):
         """Bring the live ledger up to date from Kite's get_orders / get_trades / get_positions results.
         Returns plain messages; WARNING lines are the ones to act on now."""
         self.require_enabled()
-        led = load_ledger(self.p("state", "live.json"), self.cfg)
+        lstore, led = self.load_live()
         rates = chg.rates_from(self.cfg)
         by_id = {str(o.get("order_id")): o for o in orders or []}
         msgs = []
@@ -497,9 +613,11 @@ class KiteAdapter(object):
                     t["qty"] = int(eo.get("filled_quantity") or eo.get("quantity") or t["qty"])
                     t["entry_time"] = _hhmm(eo.get("order_timestamp") or eo.get("exchange_timestamp"))
                     t["status"] = "open"
+                    self._ev(t, "filled", eo.get("order_id"), "filled at %.2f" % t["entry_fill"])
                     msgs.append("%s: entry filled, %d shares at %.2f" % (t["trade_id"], t["qty"], t["entry_fill"]))
                 elif st in ("REJECTED", "CANCELLED"):
                     t["status"] = "failed"
+                    self._ev(t, "rejected" if st == "REJECTED" else "cancelled", eo.get("order_id"), eo.get("status_message"))
                     t["notes"] = _add(t.get("notes"), "entry %s: %s" % (st.lower(), eo.get("status_message") or ""))
                     msgs.append("%s: the entry was %s (%s). No position." % (t["trade_id"], st.lower(),
                                                                           eo.get("status_message") or "no reason"))
@@ -544,8 +662,9 @@ class KiteAdapter(object):
                          r_multiple=round(net / t["risk_at_stop"], 2) if t.get("risk_at_stop") else None)
                 led["balance"] = r2(float(led["balance"]) + net)
                 t["balance_after"] = led["balance"]
+                t["charges_kind"] = "estimated"
                 t["notes"] = _add(t.get("notes"), "charges are an estimate from the rate table; the contract note is "
-                                                  "the final word")
+                                                  "the final word (kite.py set-charges)")
                 msgs.append("%s closed (%s): in %.2f, out %.2f, gross %s, charges %s, net %s. Balance %s." % (
                     t["trade_id"], reason, t["entry_fill"], fill, inr(gross, True), inr(c["total"], True),
                     inr(net, True), inr(led["balance"], True)))
@@ -561,8 +680,75 @@ class KiteAdapter(object):
             for sym, q in ours.items():
                 if sym not in held:
                     msgs.append("WARNING this record has %s open but Kite shows no MIS position in it" % sym)
-        write_json(self.p("state", "live.json"), led)
+        lstore.save(led, self.now)
+        for m_ in msgs:
+            if m_.startswith("WARNING") and db.exists(self.db_path()):
+                kind = "no stop" if "NO stop" in m_ else "stop problem" if "stop" in m_ else "position mismatch"
+                db.add_discrepancy(self.db_path(), "live", kind, None, m_, self.now)
         return msgs
+
+    def _ev(self, trade, status, broker_id, detail):
+        if trade.get("order_id") and db.exists(self.db_path()):
+            db.record_order_event(self.db_path(), trade["order_id"], status, str(broker_id) if broker_id else None,
+                                  detail, self.now)
+
+    def reconcile(self, orders, trades, positions, margins=None):
+        """The after-15:30 comparison. Kite always wins: nothing is silently changed; every difference becomes a
+        message and a row in the discrepancies table. Returns (messages, differences)."""
+        msgs = self.sync(orders, trades, positions)
+        diffs = []
+        st, led = self.load_live()
+        kite_trades = [x for x in trades or [] if str(x.get("product", "MIS")).upper() == "MIS"]
+        known_orders = {str(t.get(k)) for t in led["trades"] for k in ("entry_order_id", "stop_order_id", "exit_order_id")
+                        if t.get(k)}
+        for x in kite_trades:
+            if str(x.get("order_id")) not in known_orders:
+                diffs.append(("trade not in the ledger", str(x.get("tradingsymbol")),
+                              "Kite has a %s of %s %s (order %s) that this record never placed" % (
+                                  x.get("transaction_type"), x.get("quantity"), x.get("tradingsymbol"), x.get("order_id"))))
+        for t in led["trades"]:
+            if t["status"] == "closed":
+                ids = {str(t.get(k)) for k in ("stop_order_id", "exit_order_id") if t.get(k)}
+                if not any(str(x.get("order_id")) in ids for x in kite_trades):
+                    diffs.append(("closed trade not at Kite", t["symbol"],
+                                  "%s is closed here but Kite shows no sell for its stop or exit order" % t["trade_id"]))
+        if margins is not None:
+            cash = available_cash(margins)
+            if cash is not None:
+                if db.exists(self.db_path()):
+                    db.set_meta(self.db_path(), "kite_account", {
+                        "at": self.now.strftime("%Y-%m-%dT%H:%M:%SZ"), "balance": cash,
+                        "positions": [{"symbol": str(p.get("tradingsymbol")), "qty": int(p.get("quantity") or 0)}
+                                      for p in ((positions.get("net") if isinstance(positions, dict) else positions) or [])
+                                      if int(p.get("quantity") or 0)]})
+                if abs(cash - float(led["balance"])) > 1.0:
+                    diffs.append(("balance", None, "Kite shows %s available; this record says %s. Kite is the truth; the "
+                                  "difference can be charges, a deposit or a fill price (use the contract note)." % (
+                                      inr(cash, True), inr(led["balance"], True))))
+        for kind, sym, detail in diffs:
+            msgs.append("DISCREPANCY (%s): %s. Not fixed silently: it is logged for you." % (kind, detail))
+            if db.exists(self.db_path()):
+                db.add_discrepancy(self.db_path(), "live", kind, sym, detail, self.now)
+        return msgs, diffs
+
+    def set_actual_charges(self, trade_id, amount):
+        """Replace the estimated charges of a closed live trade with the contract note's figure."""
+        st, led = self.load_live()
+        t = next((x for x in led["trades"] if x["trade_id"] == trade_id), None)
+        if not t or t["status"] != "closed":
+            raise KiteError("no closed live trade %s" % trade_id)
+        amount = r2(amount)
+        delta = r2(float(t["charges"]) - amount)
+        t["charges"] = amount
+        t["net_pnl"] = r2(float(t["gross_pnl"]) - amount)
+        t["charges_kind"] = "actual"
+        if t.get("risk_at_stop"):
+            t["r_multiple"] = round(t["net_pnl"] / t["risk_at_stop"], 2)
+        led["balance"] = r2(float(led["balance"]) + delta)
+        t["balance_after"] = r2(float(t["balance_after"] or led["balance"]) + delta)
+        t["notes"] = _add(t.get("notes"), "charges replaced by the contract note's figure")
+        st.save(led, self.now)
+        return t
 
 
 def _add(a, b):
@@ -593,7 +779,13 @@ def _cfg(a):
     return read_json(a.config, "config") or {}
 
 
+def _load_saved(path, what):
+    doc = read_json(path, what) if path else None
+    return doc.get("data", doc) if isinstance(doc, dict) and "data" in doc else doc
+
+
 def cmd_check(a):
+    """The read-only connection check. No order is possible until this passes today."""
     cfg = _cfg(a)
     now = parse_now(a.now)
     today = to_ist(now).date().isoformat()
@@ -609,10 +801,46 @@ def cmd_check(a):
         print("kite.py: that does not look like a Kite profile (no user_id): log in again and call get_profile.",
               file=sys.stderr)
         return 1
+    if not a.tools_need_approval:
+        print("kite.py: not verified. Every Kite tool that places, modifies, cancels or exits orders (place_order, "
+              "modify_order, cancel_order, the GTT tools) must be set to \"Needs approval\" in Claude (Customize, "
+              "Connectors, the Kite server). A script cannot see that setting: check it yourself, then run this "
+              "again with --tools-need-approval.", file=sys.stderr)
+        return 1
+    ad = KiteAdapter(cfg, None, a.base, now)
+    problems, notes = [], []
+    if a.margins:
+        cash = available_cash(_load_saved(a.margins, "get_margins result"))
+        notes.append("Kite shows %s available." % (inr(cash, True) if cash is not None else "no readable cash figure"))
+        if cash is None:
+            problems.append("the margins result has no cash figure I can read")
+        elif cash <= 0:
+            problems.append("Kite shows no available cash")
+    else:
+        problems.append("pass --margins (the get_margins result): the available cash must be read")
+    if a.positions:
+        pos = _load_saved(a.positions, "get_positions result")
+        net = (pos.get("net") if isinstance(pos, dict) else pos) or []
+        open_pos = {str(p.get("tradingsymbol")): int(p.get("quantity") or 0) for p in net if int(p.get("quantity") or 0)}
+        _, led = ad.load_live()
+        ours = {t["symbol"]: t["qty"] for t in led["trades"] if t["status"] in ("open", "pending_fill")}
+        for sym, q in open_pos.items():
+            if ours.get(sym) != q:
+                problems.append("Kite shows %d %s open and this record has %s: unexpected position" % (q, sym, ours.get(sym, 0)))
+        notes.append("%d open position%s at Kite." % (len(open_pos), "" if len(open_pos) == 1 else "s"))
+    else:
+        problems.append("pass --positions (the get_positions result): unexpected open positions must be ruled out")
+    if problems:
+        print("kite.py: NOT verified:", file=sys.stderr)
+        for pr in problems:
+            print("  - " + pr, file=sys.stderr)
+        return 1
     write_json(os.path.join(os.path.dirname(a.out) or ".", os.path.basename(a.out)),
                {"verified": True, "date": today, "broker": "zerodha", "checked_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "order_tools_need_approval_confirmed_by_user": True,
                 "note": "a profile call worked today; no user details are stored"})
-    print("Kite verified for %s. Tokens end at the next morning's reset: check again each day." % today)
+    print("Kite verified for %s. %s" % (today, " ".join(notes)))
+    print("Kite's login expires every day: log in again tomorrow before you trade.")
     return 0
 
 
@@ -633,7 +861,9 @@ def cmd_prepare(a):
     order = _order(a)
     open_orders = read_json(a.open_orders, "get_orders result (call get_orders first and save it)")
     open_orders = open_orders.get("data", open_orders) if isinstance(open_orders, dict) else open_orders
-    call = ad.prepare(order, open_orders)
+    ltp = _load_saved(a.ltp, "get_ltp result") if a.ltp else None
+    margins = _load_saved(a.margins, "get_margins result") if a.margins else None
+    call = ad.prepare(order, open_orders, ltp, margins)
     print("All gates pass for order %d. Make exactly this one Kite tool call (the Allow once card will ask):" % a.index)
     print(json.dumps(call, indent=2))
     print("Then: kite.py record --index %d --order-id <the id Kite returned>   (or --failed / --denied)" % a.index)
@@ -656,7 +886,7 @@ def cmd_stop_ticket(a):
     cfg = _cfg(a)
     ad = KiteAdapter(cfg, None, a.base, parse_now(a.now))
     ad.require_enabled()
-    led = load_ledger(os.path.join(a.base, "state", "live.json"), cfg)
+    _, led = ad.load_live()
     t = next((x for x in led["trades"] if x["trade_id"] == a.trade), None)
     if not t:
         raise KiteError("no live trade %s" % a.trade)
@@ -683,14 +913,55 @@ def cmd_sync(a):
     return 1 if any(m.startswith("WARNING") for m in msgs) else 0
 
 
+def cmd_prices(a):
+    """Save Kite's last prices as trader/prices.json so trader-risk measures an entry against Kite, not Yahoo."""
+    now = parse_now(a.now)
+    ltp = _load_saved(a.ltp, "get_ltp result")
+    doc = ltp if isinstance(ltp, dict) else {}
+    prices, detail = {}, {}
+    for key in doc:
+        sym = key.split(":", 1)[-1].upper()
+        px = last_price(ltp, sym)
+        if px is not None:
+            prices[sym] = px
+            detail[sym] = {"time": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "source": "kite get_ltp"}
+    if not prices:
+        raise KiteError("no prices in that get_ltp result")
+    write_json(a.out, {"as_of": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "source": "kite", "prices": prices, "detail": detail})
+    print("Saved %d Kite price%s to %s: %s." % (len(prices), "" if len(prices) == 1 else "s", a.out,
+                                               ", ".join("%s %.2f" % kv for kv in sorted(prices.items()))))
+    return 0
+
+
+def cmd_reconcile(a):
+    ad = KiteAdapter(_cfg(a), None, a.base, parse_now(a.now))
+    msgs, diffs = ad.reconcile(_load_saved(a.orders_file, "get_orders result"), _load_saved(a.trades_file, "get_trades result"),
+                               _load_saved(a.positions_file, "get_positions result"),
+                               _load_saved(a.margins, "get_margins result") if a.margins else None)
+    for m in msgs or ["Nothing changed."]:
+        print(m)
+    print("Live reconcile: %s." % ("Kite and the record agree" if not diffs and not any(m.startswith("WARNING") for m in msgs)
+                                   else "DIFFERENCES FOUND. Kite is the truth. Look at each one before the next trade."))
+    return 1 if diffs or any(m.startswith("WARNING") for m in msgs) else 0
+
+
+def cmd_set_charges(a):
+    ad = KiteAdapter(_cfg(a), None, a.base, parse_now(a.now))
+    ad.require_enabled()
+    t = ad.set_actual_charges(a.trade, a.amount)
+    print("%s: charges are now %s (from the contract note), net %s." % (t["trade_id"], inr(t["charges"], True),
+                                                                    inr(t["net_pnl"], True)))
+    return 0
+
+
 def cmd_status(a):
     cfg = _cfg(a)
     now = parse_now(a.now)
     ok, why = enabled(cfg, read_json(os.path.join(a.base, "state", "kite.json"), "kite state", required=False),
                       to_ist(now).date().isoformat())
     print("Kite adapter: %s" % ("ON (live mode, enabled, verified today)" if ok else "OFF. " + why))
-    led = read_json(os.path.join(a.base, "state", "live.json"), "live ledger", required=False)
-    if led:
+    _, led = KiteAdapter(cfg, None, a.base, now).load_live()
+    if led and led.get("trades"):
         print("Live ledger: balance %s, %d trades." % (inr(led["balance"], True), len(led["trades"])))
     return 0
 
@@ -707,12 +978,18 @@ def main(argv=None):
     p = sub.add_parser("check")
     common(p)
     p.add_argument("--profile", required=True)
+    p.add_argument("--margins", help="the saved get_margins result")
+    p.add_argument("--positions", help="the saved get_positions result")
+    p.add_argument("--tools-need-approval", action="store_true",
+                   help="you confirm every Kite order tool is set to Needs approval in Claude")
     p.add_argument("--out", default="trader/state/kite.json")
     p = sub.add_parser("prepare")
     common(p)
     p.add_argument("--index", type=int, required=True)
     p.add_argument("--orders", default="trader/orders.json")
     p.add_argument("--open-orders", required=True, help="the saved get_orders result")
+    p.add_argument("--ltp", help="the saved get_ltp result (required for an entry)")
+    p.add_argument("--margins", help="the saved get_margins result (required for an entry)")
     p = sub.add_parser("record")
     common(p)
     p.add_argument("--index", type=int, required=True)
@@ -730,6 +1007,20 @@ def main(argv=None):
     p.add_argument("--orders-file", required=True)
     p.add_argument("--trades-file", required=True)
     p.add_argument("--positions-file")
+    p = sub.add_parser("prices")
+    common(p)
+    p.add_argument("--ltp", required=True)
+    p.add_argument("--out", default="trader/prices.json")
+    p = sub.add_parser("reconcile")
+    common(p)
+    p.add_argument("--orders-file", required=True)
+    p.add_argument("--trades-file", required=True)
+    p.add_argument("--positions-file", required=True)
+    p.add_argument("--margins")
+    p = sub.add_parser("set-charges")
+    common(p)
+    p.add_argument("--trade", required=True)
+    p.add_argument("--amount", type=float, required=True, help="total charges from the contract note, rupees")
     p = sub.add_parser("status")
     common(p)
     a = ap.parse_args(argv)
@@ -738,7 +1029,8 @@ def main(argv=None):
         return 1
     try:
         return {"check": cmd_check, "prepare": cmd_prepare, "record": cmd_record, "stop-ticket": cmd_stop_ticket,
-                "sync": cmd_sync, "status": cmd_status}[a.cmd](a)
+                "sync": cmd_sync, "status": cmd_status, "prices": cmd_prices, "reconcile": cmd_reconcile,
+                "set-charges": cmd_set_charges}[a.cmd](a)
     except KiteDisabled as e:
         print("kite.py: OFF. %s" % e, file=sys.stderr)
         return 2

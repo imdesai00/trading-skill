@@ -140,6 +140,14 @@ It never places, approves or schedules an order, never raises a limit on its
 own, never shrinks a stop to fit more shares, and never sizes F&O, margin or
 short positions.
 
+## Added (database edition)
+
+- `size.py init` writes the limits as **percent of capital** (`limits_pct`; the rupee values are derived) and creates
+  `trader/trader.db`. Only `control.py` (with the user's yes) or the user's own edit changes them.
+- Sizing uses the same **half-size** and **protection** rules as trader-risk (results day, events, VIX, the first live
+  weeks, ASM/GSM, MIS list), so the order you are shown is one the risk check will accept. It says when it halved
+  the risk and why.
+
 ## Safety
 
 - Education and tooling, not financial advice. A PASS is a rules check, not a recommendation.

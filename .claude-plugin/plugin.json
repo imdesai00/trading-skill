@@ -1,6 +1,6 @@
 {
   "name": "india-day-trader-skill",
-  "description": "13 Claude skills for NSE day trading: scan charts, track news, time every entry and exit, replay every outcome, and paper trade first. Longs only, no leverage, your yes on every order.",
+  "description": "15 Claude skills for NSE day trading: scan charts, track news, time every entry and exit, replay every outcome, and paper trade first. Longs only, no leverage, your yes on every order.",
   "version": "1.0.0",
   "author": {
     "name": "imdesai00 (conversion); original by Jake Schincariol",

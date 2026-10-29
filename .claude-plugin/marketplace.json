@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "india-day-trader-skill",
-      "description": "Thirteen Claude skills for NSE intraday trading: scanner, news, entry timer, exit planner, time machine, budget manager, risk manager, order executor (paper by default, never without your yes), alerts, Notion journal, go-live review, results analyst and insider tracker.",
+      "description": "Fifteen Claude skills for NSE intraday trading: scanner, news, entry timer, exit planner, time machine, budget manager, risk manager, order executor (paper by default, never without your yes), alerts, Notion journal, local database, capital and kill-switch control, go-live review, results analyst and insider tracker.",
       "source": "./",
       "category": "productivity",
       "homepage": "https://github.com/imdesai00/trading-skill"

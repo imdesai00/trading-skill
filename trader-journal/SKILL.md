@@ -136,6 +136,20 @@ deletes a Notion page, never writes to a Notion page the user did not name, and
 never changes the user's limits. Live trades are logged the same way with Mode
 = live once Kite is connected.
 
+## Added (database edition)
+
+With `trader/trader.db` present the database is the ledger and the outbox. Notion now has nine databases: Trades,
+Skipped Signals, Daily Summary, Weekly Reports, **Account** (the paper account you look at, or the Live Account as read from
+Kite), **Orders**, **Capital Changes**, **Pauses** and **Discrepancies**. Trades carry "Why I took it", "How I felt", the
+charges type (estimated or actual), the order id and the broker order id. Paper and live are queued separately
+(`--mode live`), and daily and weekly rows carry the mode.
+
+- After each sync, Claude reads the rows back from Notion into `trader/state/notion_export.json` and runs
+  `journal.py verify --from trader/state/notion_export.json`: it compares counts and totals with the database and
+  reports every mismatch.
+- `journal.py rebuild --from FILE --into-db` restores a lost database from Notion (its hash chain starts fresh; run
+  `db.py check`). `journal.py requeue` restores a lost Notion from the database.
+
 ## Safety
 
 - Education and tooling, not financial advice. A PASS is a rules check, not a recommendation.

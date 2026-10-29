@@ -67,6 +67,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import charges as chg  # noqa: E402  (a copy of trader-budget/charges.py; a test keeps the copies identical)
+import db  # noqa: E402  (a copy of trader-db/db.py; a test keeps the copies identical)
+import guards  # noqa: E402  (shared guard rules; trader-budget, -scanner and -control carry identical copies)
 
 DEFAULTS = {
     "mode": "paper", "kite_enabled": False, "capital_inr": 100000, "max_loss_per_trade_inr": 500,
@@ -333,13 +335,18 @@ def kite_ready(c, kite_state, today):
 
 # ---------------------------------------------------------------- the check
 
-def check(orders, cfg, ledger=None, prices=None, kite_state=None, today=None, now=None, price_times=None):
+def check(orders, cfg, ledger=None, prices=None, kite_state=None, today=None, now=None, price_times=None,
+          prot=None, control=None, prev_closes=None):
     """Pure function. Returns {"results": [...], "pass": n, "block": n, "warnings": [...], ...}.
 
     now          naive UTC (default: the real clock); its India date is "today"
-    price_times  {SYM: naive UTC time of that price}; None = every price counts as fresh"""
+    price_times  {SYM: naive UTC time of that price}; None = every price counts as fresh
+    prot         the protection data from guards.load_protection (None = those checks are off)
+    control      reasons no new entry may be placed (kill switch, pause) from db.control_blocks
+    prev_closes  {SYM: yesterday's close}, for the circuit-limit check"""
     c = dict(DEFAULTS)
     c.update(cfg or {})
+    c, limit_notes = guards.effective_limits(c)
     rates = chg.rates_from(c)
     slip = float(c.get("paper_slippage_pct") or 0) if c.get("limits_include_slippage", True) else 0.0
     prices = {str(k).upper(): float(v) for k, v in (prices or {}).items() if _f(v)}
@@ -349,7 +356,15 @@ def check(orders, cfg, ledger=None, prices=None, kite_state=None, today=None, no
     capital = float(c.get("capital_inr") or 0)
     mode = str(c.get("mode") or "paper").lower()
     view = ledger_view(ledger, today, capital)
-    top_warn = []
+    top_warn = list(limit_notes)
+    control = list(control or [])
+    prev_closes = {str(k).upper(): v for k, v in (prev_closes or {}).items()}
+    ledger_trades = [t for t in (ledger or {}).get("trades", []) if isinstance(t, dict)]
+    brake_reasons = guards.brakes(ledger_trades, today, now_ist, c)
+    strict_data = guards.strict(c, mode)
+    gaps = guards.data_gaps(prot, today) if prot is not None else []
+    if gaps and not strict_data:
+        top_warn.append("protection data is incomplete, so these checks could NOT run: " + "; ".join(gaps))
     blocked = {str(b).upper() for b in c.get("blocked") or []}
     win_reasons = window_check(now_ist, c)
     mode_reasons = []
@@ -463,6 +478,9 @@ def check(orders, cfg, ledger=None, prices=None, kite_state=None, today=None, no
         if plan_entry and live is None and sym in prices and price_times is not None and etype == "market":
             warns.append("the %s price in trader/prices.json is older than %d minutes: not used" % (sym, FRESH_MINUTES))
         value = (qty or 0) * ref if ref else None
+        factor, f_reasons, f_stops = 1.0, [], []
+        if kind == "entry" and side == "buy" and prot is not None:
+            factor, f_reasons, f_stops = guards.size_factor(sym, today, c, prot, mode, ledger_trades)
 
         max_loss = rr = charge_pct = None
         if kind == "entry" and side == "buy":
@@ -472,6 +490,25 @@ def check(orders, cfg, ledger=None, prices=None, kite_state=None, today=None, no
                                                  inr(c["max_drawdown_pause_inr"])))
             if sym in blocked:
                 later.append("blocked: %s is on your blocked list" % sym)
+            later.extend(control)
+            later.extend(brake_reasons)
+            later.extend(f_stops)
+            if prot is not None:
+                if gaps and strict_data:
+                    later.append("data: protection data missing, entries are blocked in live mode until it is "
+                                 "refreshed (VERIFY.md section 14): " + "; ".join(gaps))
+                later.extend(guards.symbol_blocks(sym, ref, prev_closes.get(sym), prot, today, c))
+            age_max = float(guards.g(c, "max_data_age_min")) if price_times is not None else None
+            if age_max and etype == "market":
+                t_px = price_times.get(sym)
+                if t_px is None:
+                    warns.append("stale: no time on the %s price, so its age could not be checked" % sym)
+                elif (now_utc - t_px).total_seconds() > age_max * 60:
+                    later.append("stale: the latest %s price is %.0f minutes old (limit %g): refresh with "
+                                 "alerts.py quote --write and check again" % (
+                                     sym, (now_utc - t_px).total_seconds() / 60.0, age_max))
+            if factor < 1.0:
+                info.append("HALF SIZE (x%g): %s" % (factor, "; ".join(f_reasons)))
             stop, target = _f(o.get("stop")), _f(o.get("target"))
             if not stop:
                 if c.get("require_stop", True):
@@ -486,11 +523,14 @@ def check(orders, cfg, ledger=None, prices=None, kite_state=None, today=None, no
                 cs = chg.charges(qty * bf, qty * sf, rates)
                 max_loss = round(qty * (bf - sf) + cs["total"], 2)
                 cap = _f(c.get("max_loss_per_trade_inr"))
+                if cap:
+                    cap = round(cap * factor, 2)
                 if cap and max_loss > cap + EPS:
                     later.append("loss: %d shares lose %s if the stop %.2f fills (risk %.2f a share + %s charges%s), "
-                                 "over your %s max loss per trade" % (
+                                 "over your %s max loss per trade%s" % (
                                      qty, inr(max_loss, True), stop, ref - stop, inr(cs["total"], True),
-                                     " + slippage" if slip else "", inr(cap)))
+                                     " + slippage" if slip else "", inr(cap),
+                                     (" (halved today: " + "; ".join(f_reasons) + ")") if factor < 1.0 else ""))
                 if not target:
                     later.append("reward: no target to measure reward:risk against")
                 elif target <= ref + 0.005:
@@ -559,7 +599,7 @@ def check(orders, cfg, ledger=None, prices=None, kite_state=None, today=None, no
                                qty, inr(value, True)))
                 info.append("loss at the stop %s incl. charges%s (limit %s); reward:risk after charges %s (min %s)"
                             % (inr(max_loss, True), " and slippage" if slip else "",
-                               inr(c["max_loss_per_trade_inr"]), ("%.2f" % rr) if rr is not None else "n/a",
+                               inr(round(c["max_loss_per_trade_inr"] * factor, 2)), ("%.2f" % rr) if rr is not None else "n/a",
                                _num(c["min_reward_risk"])))
             info.append("today before this: %d of %s trades, %s of %s daily; this week %s of %s"
                         % (view["entries_today"] + batch_entries, c.get("max_trades_per_day") or "unlimited",
@@ -663,6 +703,7 @@ def main(argv=None):
     ap.add_argument("--orders", default="trader/orders.json")
     ap.add_argument("--config", default="trader/config.json")
     ap.add_argument("--ledger", help="account ledger (default trader/state/<mode>.json)")
+    ap.add_argument("--db", help="default: trader/trader.db (next to the state folder)")
     ap.add_argument("--prices", default="trader/prices.json")
     ap.add_argument("--kite-state", default="trader/state/kite.json", help="the Kite connection check (live mode)")
     ap.add_argument("--now", help="pretend it is this India time, e.g. \"2026-10-30 09:51\"")
@@ -681,12 +722,25 @@ def main(argv=None):
             raise RiskError("no orders in %s" % a.orders)
         cfg = read_json(a.config, "config", required=False) or {}
         mode = str(cfg.get("mode") or "paper").lower()
-        ledger = read_json(a.ledger or "trader/state/%s.json" % ("live" if mode == "live" else "paper"),
-                           "ledger", required=False)
+        ledger_path = a.ledger or "trader/state/%s.json" % ("live" if mode == "live" else "paper")
+        dbp = a.db or db.default_path(ledger_path)
+        store = db.LedgerStore(ledger_path, dbp, "live" if mode == "live" else "paper", cfg,
+                               lambda c_: {"trades": [], "skipped": []},
+                               lambda p: read_json(p, "ledger", required=False), lambda p, d: None)
+        ledger = store.load()
+        if db.exists(dbp) and cfg:
+            db.log_config(dbp, cfg, "manual-edit", "the config file differs from the last recorded one (seen by check.py)", now)
+        state_dir = os.path.join(os.path.dirname(os.path.abspath(a.config)), "state")
+        prot = guards.load_protection(state_dir)
+        control = db.control_blocks(a.config, mode, a.today or to_ist(now).date().isoformat(), dbp)
         pdoc = read_json(a.prices, "prices", required=False) or {}
         prices, times = load_prices(pdoc)
         kite_state = read_json(a.kite_state, "kite state", required=False)
-        res = check(orders, cfg, ledger, prices, kite_state, a.today, now, times)
+        prev = {str(s_).upper(): (d_ or {}).get("prev_close")
+                for s_, d_ in (pdoc.get("detail") or {}).items() if isinstance(d_, dict)}
+        res = check(orders, cfg, ledger, prices, kite_state, a.today, now, times, prot, control, prev)
+        if store.uses_db:
+            db.record_verdicts(dbp, mode, res["date"], res["results"], now)
         if not a.no_write:
             d = os.path.dirname(a.out)
             if d:

@@ -73,6 +73,11 @@ machine the tool prints a `note:` line and the other feeds still run. Tell the u
 It never places an order, never changes a limit, never asks for a key (no feed here needs one), and
 never reads a web page that is not a public feed.
 
+## Added (database edition)
+
+`news.py` also writes `trader/state/results_today.json`, which trader-risk and trader-budget read to halve the size on a
+results day, and logs every item in the database (news_items table).
+
 ## Safety
 
 - Education and tooling, not financial advice. A PASS is a rules check, not a recommendation.

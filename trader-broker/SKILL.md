@@ -174,6 +174,29 @@ The full steps come with the Kite adapter. The outline, from VERIFY.md:
 - Never switches `"mode"` or `"kite_enabled"`. You do that yourself.
 - Never promises a fill price: a market order and a stop fill at whatever the market gives.
 
+## The database, the "why", and the live steps (added)
+
+- **Ask "Why are you taking this trade?" before the yes** and pass the user's answer with
+  `ticket.py approve ... --why "..."`. It is required for entries and is stored with the approval and the trade.
+  After an exit, ask "How did you feel about it?" and save it: `paper.py feel --trade ID --text "..."`.
+- With `trader/trader.db` present, every yes or no (the user's exact words), every order and its status
+  changes, every fill and every trade are written to the database as well (see trader-db). `paper.py reconcile`
+  makes a dated backup by itself afterwards.
+- **Kill switch and pause.** If `trader/STOP` exists or trading is paused, `approve`, `paper.py open` and
+  `kite.py prepare` refuse a new entry. Exits are never blocked.
+- **Live entries use Kite's own price and cash.** Before `kite.py prepare` for an entry, call `get_ltp` and
+  `get_margins` and save the results; pass them with `--ltp` and `--margins`. If Kite's last price is more than
+  0.3% from the planned entry, the yes is used up, nothing is placed, and the user must run trader-risk again
+  (`kite.py prices --ltp FILE` saves Kite's price for it) and say yes again. The cash must cover the whole
+  order: leverage is off.
+- `kite.py check` now needs `--margins`, `--positions` and `--tools-need-approval`, which the user passes only
+  after confirming every Kite order tool is set to "Needs approval" in Claude. It fails on an unexpected open
+  position. Remind the user that Kite's login expires every day.
+- **After the close, live:** `kite.py reconcile --orders-file F --trades-file F --positions-file F --margins F`
+  compares Kite with the record. Kite always wins: every difference is printed and written to the
+  discrepancies table, never silently fixed. When the contract note arrives, `kite.py set-charges --trade ID
+  --amount X` replaces the estimated charges with the real ones (marked "actual").
+
 ## Safety
 
 - Education and tooling, not financial advice. A PASS is a rules check, not a recommendation.

@@ -40,11 +40,19 @@ import os
 import re
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import db  # noqa: E402  (a copy of trader-db/db.py; a test keeps the copies identical)
+
 OUTBOX_VERSION = 1
-DB_ORDER = ("paper_trades", "skipped_signals", "daily_summary", "weekly_reports")
-DB_TITLES = {"paper_trades": "Paper Trades", "skipped_signals": "Skipped Signals",
-             "daily_summary": "Daily Summary", "weekly_reports": "Weekly Reports"}
-PAGE_TITLE = "India Day Trader – Paper Trading"
+DB_ORDER = ("paper_trades", "skipped_signals", "daily_summary", "weekly_reports", "accounts", "orders",
+            "capital_changes", "pauses", "discrepancies")
+DB_TITLES = {"paper_trades": "Trades", "skipped_signals": "Skipped Signals",
+             "daily_summary": "Daily Summary", "weekly_reports": "Weekly Reports", "accounts": "Account",
+             "orders": "Orders", "capital_changes": "Capital Changes", "pauses": "Pauses",
+             "discrepancies": "Discrepancies"}
+MODE_SEL = (("paper", "blue"), ("live", "red"))
+PAGE_TITLE = "India Day Trader"
 LIMIT_DEFAULTS = {"capital_inr": 100000, "max_loss_per_trade_inr": 500, "max_daily_loss_inr": 1500,
                   "max_weekly_loss_inr": 4000, "max_drawdown_pause_inr": 8000, "max_trades_per_day": 3}
 HYP_REASONS = ("target", "stop", "flat-by")
@@ -201,7 +209,10 @@ def columns(db, capital=100000):
             ("Risk verdict", sel(("PASS", "green"), ("BLOCK", "red"))), ("News tags", "RICH_TEXT"),
             ("My approval (exact words)", "RICH_TEXT"), ("Mode", sel(("paper", "blue"), ("live", "red"))),
             ("Status", sel(("open", "yellow"), ("closed", "gray"))), ("Account balance after ₹", "NUMBER"),
-            ("Notes", "RICH_TEXT"), ("Entry time", "RICH_TEXT"), ("Flat by", "RICH_TEXT")]
+            ("Notes", "RICH_TEXT"), ("Entry time", "RICH_TEXT"), ("Flat by", "RICH_TEXT"),
+            ("Why I took it", "RICH_TEXT"), ("How I felt", "RICH_TEXT"),
+            ("Charges type", sel(("estimated", "yellow"), ("actual", "green"))), ("Order ID", "RICH_TEXT"),
+            ("Broker order ID", "RICH_TEXT")]
     if db == "skipped_signals":
         return [
             ("Signal ID", "TITLE"), ("Date", "DATE"), ("Symbol", "RICH_TEXT"), ("Setup type", "RICH_TEXT"),
@@ -215,13 +226,42 @@ def columns(db, capital=100000):
             ("Day", "TITLE"), ("Date", "DATE"), ("Trades", "NUMBER"), ("Wins", "NUMBER"), ("Losses", "NUMBER"),
             ("Net P&L ₹", "NUMBER"), ("Charges ₹", "NUMBER"), ("Win rate", "NUMBER"), ("Avg R", "NUMBER"),
             ("Balance ₹", "NUMBER"), (drawdown_name(capital), "NUMBER"), ("Limits hit", "RICH_TEXT"),
-            ("Rules broken", "RICH_TEXT")]
+            ("Rules broken", "RICH_TEXT"), ("Mode", sel(*MODE_SEL))]
     if db == "weekly_reports":
         return [
             ("Week", "TITLE"), ("Week start", "DATE"), ("Week end", "DATE"), ("Trades", "NUMBER"),
             ("Win rate", "NUMBER"), ("Avg R", "NUMBER"), ("Expectancy per trade ₹", "NUMBER"),
             ("Charges paid ₹", "NUMBER"), ("Net P&L ₹", "NUMBER"), ("Balance ₹", "NUMBER"),
-            ("Balance vs start ₹", "NUMBER")]
+            ("Balance vs start ₹", "NUMBER"), ("Mode", sel(*MODE_SEL))]
+    if db == "accounts":
+        return [
+            ("Account", "TITLE"), ("Mode", sel(*MODE_SEL)), ("Balance ₹", "NUMBER"), ("Capital baseline ₹", "NUMBER"),
+            ("Capital ₹", "NUMBER"), ("Realised P&L ₹", "NUMBER"), ("Open positions", "RICH_TEXT"),
+            ("Source", "RICH_TEXT"), ("Updated", "RICH_TEXT")]
+    if db == "orders":
+        return [
+            ("Order ID", "TITLE"), ("Date/time", "RICH_TEXT"), ("Date", "DATE"), ("Mode", sel(*MODE_SEL)),
+            ("Symbol", "RICH_TEXT"), ("Side", sel(("buy", "green"), ("sell", "red"))), ("Qty", "NUMBER"),
+            ("Type", "RICH_TEXT"), ("Price", "NUMBER"), ("Stop", "NUMBER"), ("Target", "NUMBER"),
+            ("Risk verdict", sel(("PASS", "green"), ("BLOCK", "red"))), ("My approval (exact words)", "RICH_TEXT"),
+            ("Why I took it", "RICH_TEXT"), ("Broker order ID (live)", "RICH_TEXT"),
+            ("Status", sel(("approved", "blue"), ("placed", "yellow"), ("filled", "green"), ("cancelled", "gray"),
+                           ("rejected", "red"), ("failed", "red"), ("denied", "gray")))]
+    if db == "capital_changes":
+        return [
+            ("Change ID", "TITLE"), ("Date", "DATE"), ("Mode", sel(*MODE_SEL)), ("Kind", "RICH_TEXT"),
+            ("Old capital ₹", "NUMBER"), ("New capital ₹", "NUMBER"), ("Reason", "RICH_TEXT"),
+            ("Limits after", "RICH_TEXT")]
+    if db == "pauses":
+        return [
+            ("Pause ID", "TITLE"), ("Date", "DATE"), ("Mode", "RICH_TEXT"),
+            ("Kind", sel(("pause", "yellow"), ("resume", "green"), ("kill", "red"))), ("Until", "RICH_TEXT"),
+            ("Reason", "RICH_TEXT")]
+    if db == "discrepancies":
+        return [
+            ("Discrepancy ID", "TITLE"), ("Date", "DATE"), ("Mode", sel(*MODE_SEL)), ("Kind", "RICH_TEXT"),
+            ("Symbol", "RICH_TEXT"), ("Detail", "RICH_TEXT"),
+            ("Status", sel(("open", "red"), ("resolved", "green")))]
     raise JournalError("unknown database %r" % db)
 
 
@@ -235,7 +275,8 @@ def ddl(db, capital=100000):
 
 
 DATE_COLUMNS = {"paper_trades": ("Date",), "skipped_signals": ("Date",), "daily_summary": ("Date",),
-                "weekly_reports": ("Week start", "Week end")}
+                "weekly_reports": ("Week start", "Week end"), "accounts": (), "orders": ("Date",),
+                "capital_changes": ("Date",), "pauses": ("Date",), "discrepancies": ("Date",)}
 
 
 # ---------------------------------------------------------------- files
@@ -476,7 +517,7 @@ def odds_text(t):
     return " / ".join("%.1f" % (100.0 * (o.get(k) or 0)) for k in ("target", "stop", "neither"))
 
 
-def trade_props(t):
+def trade_props(t, notes=None):
     p = {"Trade ID": t["trade_id"]}
     p.update(_date_props("Date", t["date"]))
     for name, key in (("Symbol", "symbol"), ("Setup type", "setup"), ("Side", "side"), ("Qty", "qty"),
@@ -490,6 +531,12 @@ def trade_props(t):
         _put(p, name, t.get(key))
     _put(p, "Time-machine odds (target/stop/open %)", odds_text(t))
     _put(p, "News tags", ", ".join(t.get("news_tags") or []))
+    notes = notes or {}
+    _put(p, "Why I took it", t.get("why") or notes.get("why"))
+    _put(p, "How I felt", notes.get("feel"))
+    _put(p, "Charges type", t.get("charges_kind") or ("estimated" if t.get("charges") is not None else None))
+    _put(p, "Order ID", t.get("order_id"))
+    _put(p, "Broker order ID", t.get("broker_order_id"))
     return p
 
 
@@ -506,8 +553,8 @@ def skipped_props(s):
     return p
 
 
-def daily_props(st):
-    p = {"Day": st["date"]}
+def daily_props(st, mode="paper"):
+    p = {"Day": "%s (%s)" % (st["date"], mode), "Mode": mode}
     p.update(_date_props("Date", st["date"]))
     p.update({"Trades": st["trades"], "Wins": st["wins"], "Losses": st["losses"], "Net P&L ₹": st["net"],
               "Charges ₹": st["charges"], "Balance ₹": st["balance"], drawdown_name(st["capital"]): st["drawdown"],
@@ -517,9 +564,9 @@ def daily_props(st):
     return p
 
 
-def weekly_props(w):
+def weekly_props(w, mode="paper"):
     s = w["summary"]
-    p = {"Week": weekly_title(w)}
+    p = {"Week": "%s (%s)" % (weekly_title(w), mode), "Mode": mode}
     p.update(_date_props("Week start", w["monday"]))
     p.update(_date_props("Week end", w["friday"]))
     p.update({"Trades": s["n"], "Charges paid ₹": s["charges"], "Net P&L ₹": s["net"], "Balance ₹": w["balance"],
@@ -595,22 +642,116 @@ def calls_for(row, cfg):
 
 # ---------------------------------------------------------------- queueing
 
-def queue_all(led, cfg, box, days=(), now=None):
+def queue_all(led, cfg, box, days=(), now=None, mode="paper", notes=None):
     counts = {"new": 0, "changed": 0, "same": 0}
+    notes = notes or {}
     for t in led["trades"]:
-        counts[upsert(box, "paper_trades", t["trade_id"], t["trade_id"], trade_props(t), None, now)] += 1
-    for s in led["skipped"]:
-        counts[upsert(box, "skipped_signals", s["signal_id"], s["signal_id"], skipped_props(s), None, now)] += 1
+        counts[upsert(box, "paper_trades", t["trade_id"], t["trade_id"], trade_props(t, notes.get(t["trade_id"])),
+                      None, now)] += 1
+    for s_ in led["skipped"]:
+        counts[upsert(box, "skipped_signals", s_["signal_id"], s_["signal_id"], skipped_props(s_), None, now)] += 1
     seen = set(days)
     for t in led["trades"]:
         seen.add(t["date"])
         if t.get("exit_date"):
             seen.add(str(t["exit_date"]))
-    for s in led["skipped"]:
-        seen.add(s["date"])
+    for s_ in led["skipped"]:
+        seen.add(s_["date"])
     for d in sorted(seen):
         st = day_stats(led, cfg, d)
-        counts[upsert(box, "daily_summary", d, d, daily_props(st), None, now)] += 1
+        counts[upsert(box, "daily_summary", "%s:%s" % (mode, d), "%s (%s)" % (d, mode), daily_props(st, mode), None,
+                      now)] += 1
+    return counts
+
+
+# ---------------------------------------------------------------- rows that come from the database
+
+def _paise(v):
+    return None if v is None else v / 100.0
+
+
+def account_props(path, mode, led, now):
+    acct = db.get_account(path, mode) or {"balance": led.get("balance"), "capital": led.get("capital"),
+                                          "baseline": led.get("capital")}
+    kite_acct = db.get_meta(path, "kite_account") if mode == "live" else None
+    if kite_acct:                       # in live mode Kite is the truth
+        acct = dict(acct, balance=kite_acct["balance"])
+    opens = [t for t in led.get("trades", []) if t.get("status") in ("open", "pending_fill")]
+    realised = sum(float(t.get("net_pnl") or 0) for t in led.get("trades", []) if t.get("status") == "closed")
+    title = "%s Account" % mode.capitalize()
+    p = {"Account": title, "Mode": mode, "Balance ₹": r2(acct["balance"]), "Capital baseline ₹": r2(acct["baseline"]),
+         "Capital ₹": r2(acct["capital"]), "Realised P&L ₹": r2(realised),
+         "Open positions": ("; ".join("%d %s (Kite)" % (x["qty"], x["symbol"]) for x in kite_acct["positions"]) or "none")
+         if kite_acct else "; ".join("%d %s (trade %s)" % (t["qty"], t["symbol"], t["trade_id"]) for t in opens) or "none",
+         "Source": ("Kite, as last read by kite.py sync (Kite is the truth in live mode)" if mode == "live"
+                    else "the paper ledger in the database"),
+         "Updated": to_ist(now).strftime("%Y-%m-%d")}
+    return title, p
+
+
+def order_rows(path, mode):
+    conn = db.connect(path)
+    try:
+        q = ("SELECT o.*, "
+             "(SELECT status FROM order_events e WHERE e.order_id=o.order_id ORDER BY e.seq DESC LIMIT 1) AS status, "
+             "(SELECT broker_order_id FROM order_events e WHERE e.order_id=o.order_id AND e.broker_order_id IS NOT NULL "
+             "ORDER BY e.seq DESC LIMIT 1) AS broker, "
+             "(SELECT reply FROM approvals a WHERE a.order_id=o.order_id ORDER BY a.seq LIMIT 1) AS reply, "
+             "(SELECT why FROM approvals a WHERE a.order_id=o.order_id ORDER BY a.seq LIMIT 1) AS why, "
+             "(SELECT verdict FROM risk_verdicts v WHERE v.fingerprint=o.fingerprint AND v.date=o.date "
+             "ORDER BY v.seq DESC LIMIT 1) AS verdict FROM orders o WHERE o.mode=? ORDER BY o.seq")
+        return [dict(r) for r in conn.execute(q, (mode,))]
+    finally:
+        conn.close()
+
+
+def order_props(r):
+    p = {"Order ID": r["order_id"], "Date/time": r["at"], "Mode": r["mode"], "Symbol": r["symbol"], "Side": r["side"],
+         "Qty": r["qty"]}
+    p.update(_date_props("Date", r["date"]))
+    for name, v in (("Type", r["order_type"]), ("Price", _paise(r["price_paise"])), ("Stop", _paise(r["stop_paise"])),
+                    ("Target", _paise(r["target_paise"])), ("Risk verdict", r["verdict"]),
+                    ("My approval (exact words)", r["reply"]), ("Why I took it", r["why"]),
+                    ("Broker order ID (live)", r["broker"]), ("Status", r["status"])):
+        _put(p, name, v)
+    return p
+
+
+def simple_rows(path, table, mode):
+    conn = db.connect(path)
+    try:
+        if table == "pauses":
+            rows = [dict(r) for r in conn.execute("SELECT * FROM pauses ORDER BY seq")]
+        else:
+            rows = [dict(r) for r in conn.execute("SELECT * FROM %s WHERE mode=? ORDER BY seq" % table, (mode,))]
+        return rows
+    finally:
+        conn.close()
+
+
+def queue_db_rows(path, mode, led, box, now):
+    counts = {"new": 0, "changed": 0, "same": 0}
+    title, props = account_props(path, mode, led, now)
+    counts[upsert(box, "accounts", mode, title, props, None, now)] += 1
+    for r in order_rows(path, mode):
+        counts[upsert(box, "orders", r["order_id"], r["order_id"], order_props(r), None, now)] += 1
+    for r in simple_rows(path, "capital_changes", mode):
+        p = {"Change ID": r["change_id"], "Mode": r["mode"], "Kind": r["kind"], "Old capital ₹": _paise(r["old_paise"]),
+             "New capital ₹": _paise(r["new_paise"]), "Reason": r["reason"] or "-",
+             "Limits after": r["limits_json"] or "-"}
+        p.update(_date_props("Date", r["at"][:10]))
+        counts[upsert(box, "capital_changes", r["change_id"], r["change_id"], p, None, now)] += 1
+    for r in simple_rows(path, "pauses", mode):
+        pid = "PAUSE-%04d" % r["seq"]
+        p = {"Pause ID": pid, "Mode": r["mode"], "Kind": r["kind"], "Until": r["until"] or "-", "Reason": r["reason"] or "-"}
+        p.update(_date_props("Date", r["at"][:10]))
+        counts[upsert(box, "pauses", pid, pid, p, None, now)] += 1
+    for r in simple_rows(path, "discrepancies", mode):
+        did = "DISC-%04d" % r["seq"]
+        p = {"Discrepancy ID": did, "Mode": r["mode"], "Kind": r["kind"], "Symbol": r["symbol"] or "-",
+             "Detail": r["detail"] or "-", "Status": r["status"]}
+        p.update(_date_props("Date", r["at"][:10]))
+        counts[upsert(box, "discrepancies", did, did, p, None, now)] += 1
     return counts
 
 
@@ -732,11 +873,44 @@ def _paths(a):
     return (a.ledger or "trader/state/%s.json" % ("live" if mode == "live" else "paper"))
 
 
+def _db(a):
+    return getattr(a, "sqlite", None) or db.default_path(a.config)
+
+
+def _store(a):
+    mode = getattr(a, "mode", "paper")
+    cfg = load_cfg(a.config)
+    return db.LedgerStore(_paths(a), _db(a), mode, cfg,
+                          lambda c: {"mode": mode, "capital": float(c["capital_inr"]), "balance": float(c["capital_inr"]),
+                                     "trades": [], "skipped": []},
+                          lambda p_: read_json(p_, "ledger", required=False), write_json, "paper" if mode == "paper" else "kite")
+
+
 def _ledger(a):
-    led = read_json(_paths(a), "ledger (the paper broker writes it)")
+    st = _store(a)
+    led = st.load()
+    for w in st.warnings:
+        print("WARNING: " + w, file=sys.stderr)
+    if not st.uses_db and not os.path.exists(_paths(a)):
+        raise JournalError("no ledger at %s (the paper broker writes it; or run db.py init)" % _paths(a))
     led.setdefault("trades", [])
     led.setdefault("skipped", [])
     return led
+
+
+def _box(a):
+    path = _db(a)
+    if db.exists(path):
+        return {"version": OUTBOX_VERSION, "rows": db.load_outbox(path)}
+    return load_outbox(a.outbox)
+
+
+def _save_box(a, box):
+    path = _db(a)
+    if db.exists(path):
+        db.save_outbox(path, box["rows"])
+    else:
+        write_json(a.outbox, box)
 
 
 def cmd_schema(a):
@@ -783,17 +957,26 @@ def cmd_setup_save(a):
     write_json(path, cfg)
     missing = [k for k in DB_ORDER if k not in dbs]
     print("Saved the Notion ids in %s (only the \"notion\" section; your limits are untouched)." % path)
-    print("Still missing: %s." % ", ".join(missing) if missing else "All four databases are saved.")
+    print("Still missing: %s." % ", ".join(missing) if missing else "All %d databases are saved." % len(DB_ORDER))
     return 0
 
 
 def cmd_queue(a):
     led, cfg = _ledger(a), load_cfg(a.config)
-    box = load_outbox(a.outbox)
+    box = _box(a)
     now = parse_now(a.now)
     days = [a.date] if getattr(a, "date", None) else [to_ist(now).date().isoformat()]
-    counts = queue_all(led, cfg, box, days, now)
-    write_json(a.outbox, box)
+    notes = {}
+    if db.exists(_db(a)):
+        for n in db.notes_for(_db(a)):
+            notes.setdefault(n["trade_id"], {})[n["kind"]] = n["text"]
+    mode = getattr(a, "mode", "paper")
+    counts = queue_all(led, cfg, box, days, now, mode, notes)
+    if db.exists(_db(a)):
+        extra = queue_db_rows(_db(a), mode, led, box, now)
+        for k in counts:
+            counts[k] += extra[k]
+    _save_box(a, box)
     pend = sum(1 for r in box["rows"] if is_pending(r))
     print("Queued: %d new, %d changed, %d unchanged. %d row%s waiting to be written to Notion." % (
         counts["new"], counts["changed"], counts["same"], pend, "" if pend == 1 else "s"))
@@ -805,9 +988,10 @@ def cmd_daily(a):
     now = parse_now(a.now)
     day = a.date or to_ist(now).date().isoformat()
     st = day_stats(led, cfg, day)
-    box = load_outbox(a.outbox)
-    res = upsert(box, "daily_summary", day, day, daily_props(st), None, now)
-    write_json(a.outbox, box)
+    box = _box(a)
+    mode = getattr(a, "mode", "paper")
+    res = upsert(box, "daily_summary", "%s:%s" % (mode, day), "%s (%s)" % (day, mode), daily_props(st, mode), None, now)
+    _save_box(a, box)
     print("\n".join(daily_text(st)))
     print("(queued for Notion: %s)" % res)
     return 0
@@ -819,10 +1003,12 @@ def cmd_weekly(a):
     day = a.week_of or to_ist(now).date().isoformat()
     w = week_stats(led, cfg, day)
     md = weekly_markdown(w)
-    box = load_outbox(a.outbox)
-    res = upsert(box, "weekly_reports", w["iso"], weekly_title(w), weekly_props(w), md, now)
-    write_json(a.outbox, box)
-    print("# Weekly report: " + weekly_title(w))
+    box = _box(a)
+    mode = getattr(a, "mode", "paper")
+    res = upsert(box, "weekly_reports", "%s:%s" % (mode, w["iso"]), "%s (%s)" % (weekly_title(w), mode),
+                 weekly_props(w, mode), md, now)
+    _save_box(a, box)
+    print("# Weekly report: %s (%s only)" % (weekly_title(w), mode.upper()))
     print(md)
     print("\n(queued for Notion: %s)" % res)
     return 0
@@ -830,7 +1016,7 @@ def cmd_weekly(a):
 
 def cmd_pending(a):
     cfg = load_cfg(a.config)
-    box = load_outbox(a.outbox)
+    box = _box(a)
     rows = [r for r in box["rows"] if is_pending(r) and (not a.db or r["db"] == a.db)]
     if a.json:
         out = [{"key": r["key"], "db": r["db"], "title": r["title"], "hash": r["hash"],
@@ -849,7 +1035,7 @@ def cmd_pending(a):
 
 
 def cmd_mark_sent(a):
-    box = load_outbox(a.outbox)
+    box = _box(a)
     for r in box["rows"]:
         if r["key"] == a.key:
             if a.hash and a.hash != r["hash"]:
@@ -862,21 +1048,91 @@ def cmd_mark_sent(a):
                 raise JournalError("%s has no Notion page id yet: pass --page-id from the create call" % a.key)
             r["sent_hash"] = r["hash"]
             r["sent_at"] = (parse_now(a.now)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            write_json(a.outbox, box)
+            _save_box(a, box)
             print("Marked %s as sent (page %s)." % (a.key, r["notion_page_id"]))
             return 0
     raise JournalError("no row %s in the outbox" % a.key)
 
 
 def cmd_status(a):
-    box = load_outbox(a.outbox)
+    box = _box(a)
     cfg = load_cfg(a.config)
     dbs = (cfg.get("notion") or {}).get("databases") or {}
-    print("Notion setup: %s." % ("done (4 databases saved)" if all(k in dbs for k in DB_ORDER)
-                                 else "NOT done (%d of 4 databases saved)" % sum(1 for k in DB_ORDER if k in dbs)))
+    n_all = len(DB_ORDER)
+    print("Notion setup: %s." % ("done (%d databases saved)" % n_all if all(k in dbs for k in DB_ORDER)
+                                 else "NOT done (%d of %d databases saved)" % (sum(1 for k in DB_ORDER if k in dbs), n_all)))
     for k in DB_ORDER:
         rows = [r for r in box["rows"] if r["db"] == k]
         print("  %-16s %3d rows, %3d pending" % (DB_TITLES[k], len(rows), sum(1 for r in rows if is_pending(r))))
+    return 0
+
+
+def cmd_verify(a):
+    """Compare what the database holds with what Notion holds (rows Claude read back). Counts and totals."""
+    cfg = load_cfg(a.config)
+    export = read_json(a.src, "Notion export (Claude saves the rows it read from Notion here)")
+    led = _ledger(a)
+    mode = a.mode
+    problems, lines = [], []
+
+    def cmp(label, mine, theirs):
+        ok = (round(mine, 2) == round(theirs, 2)) if isinstance(mine, float) or isinstance(theirs, float) else mine == theirs
+        lines.append("  %-34s database %-12s Notion %-12s %s" % (label, mine, theirs, "ok" if ok else "MISMATCH"))
+        if not ok:
+            problems.append(label)
+    rows = [trade_from_row(r) for r in export.get("paper_trades", [])]
+    rows = [t for t in rows if t["mode"] == mode]
+    mine_ids, their_ids = {t["trade_id"] for t in led["trades"]}, {t["trade_id"] for t in rows}
+    cmp("trades", len(mine_ids), len(their_ids))
+    cmp("closed trades", sum(1 for t in led["trades"] if t["status"] == "closed"), sum(1 for t in rows if t["status"] == "closed"))
+    cmp("net P&L after charges", r2(sum(float(t.get("net_pnl") or 0) for t in led["trades"] if t["status"] == "closed")),
+        r2(sum(float(t.get("net_pnl") or 0) for t in rows if t["status"] == "closed")))
+    cmp("charges", r2(sum(float(t.get("charges") or 0) for t in led["trades"] if t["status"] == "closed")),
+        r2(sum(float(t.get("charges") or 0) for t in rows if t["status"] == "closed")))
+    sk = [skipped_from_row(r) for r in export.get("skipped_signals", [])]
+    sk = [x for x in sk if x["mode"] == mode]
+    cmp("skipped signals", len(led["skipped"]), len(sk))
+    if db.exists(_db(a)):
+        counts = {"orders": len(order_rows(_db(a), mode)),
+                  "capital_changes": len(simple_rows(_db(a), "capital_changes", mode)),
+                  "pauses": len(simple_rows(_db(a), "pauses", mode)),
+                  "discrepancies": len(simple_rows(_db(a), "discrepancies", mode))}
+        for k, n in counts.items():
+            if k in export:
+                cmp(DB_TITLES[k].lower(), n, len([r for r in export[k] if (_txt(_get(r, "Mode")) or mode) in (mode, "all")]))
+        acct = db.get_account(_db(a), mode)
+        arow = [r for r in export.get("accounts", []) if (_txt(_get(r, "Mode")) or "") == mode]
+        if acct and arow:
+            cmp("account balance", r2(acct["balance"]), r2(_num(_get(arow[0], "Balance ₹")) or 0))
+    miss_n = sorted(mine_ids - their_ids)[:10]
+    miss_d = sorted(their_ids - mine_ids)[:10]
+    print("Sync check, %s mode: the database against the rows read back from Notion." % mode.upper())
+    print("\n".join(lines))
+    if miss_n:
+        print("  not in Notion yet: " + ", ".join(miss_n))
+    if miss_d:
+        print("  in Notion but not in the database: " + ", ".join(miss_d))
+    if problems or miss_n or miss_d:
+        print("MISMATCH in: %s. Do not assume either side is right: look at the rows (the database has the hash-"
+              "chained record; Notion is the readable copy). Pending rows may simply not be synced yet "
+              "(journal.py pending)." % (", ".join(problems) or "trade ids"))
+        return 1
+    print("Everything agrees.")
+    return 0
+
+
+def cmd_requeue(a):
+    """Restore Notion from the database: mark every row as not yet in Notion. Rows are re-created, with a look-up
+    by title first so nothing already there is duplicated."""
+    box = _box(a)
+    n = 0
+    for r in box["rows"]:
+        if r.get("sent_hash") is not None or r.get("notion_page_id"):
+            r["sent_hash"], r["notion_page_id"], r["sent_at"] = None, None, None
+            n += 1
+    _save_box(a, box)
+    print("%d row%s will be written to Notion again (journal.py pending). Each is looked up by its title first." % (
+        n, "" if n == 1 else "s"))
     return 0
 
 
@@ -885,6 +1141,11 @@ def cmd_rebuild(a):
     export = read_json(a.src, "Notion export (Claude saves the rows it read from Notion here)")
     mode = a.mode
     out = a.ledger or "trader/state/%s.json" % ("live" if mode == "live" else "paper")
+    if db.exists(_db(a)) and not a.force:
+        existing = db.load_ledger(_db(a), mode, cfg)
+        if existing["trades"] or existing["skipped"]:
+            raise JournalError("the database already holds %s records. Rebuild is for when it was lost; pass --force "
+                               "to add what Notion holds that it does not." % mode)
     if os.path.exists(out) and not a.force:
         raise JournalError("%s already exists. Rebuild is for when local files are lost; pass --force to replace "
                            "it with what Notion holds (the old file is kept as %s.bak)." % (out, out))
@@ -892,6 +1153,13 @@ def cmd_rebuild(a):
     if os.path.exists(out):
         os.replace(out, out + ".bak")
     write_json(out, led)
+    if a.into_db or db.exists(_db(a)):
+        if not db.exists(_db(a)):
+            db.init(_db(a))
+        db.save_ledger(_db(a), mode, led, parse_now(a.now), "notion")
+        db.set_account(_db(a), mode, capital=led["capital"], balance=led["balance"], baseline=led["capital"])
+        print("Imported into the database %s. Its hash chain starts fresh from this import: run db.py check, and "
+              "keep the Notion record." % _db(a))
     nopen = sum(1 for t in led["trades"] if t["status"] == "open")
     print("Rebuilt %s from Notion: %d trades (%d open), %d skipped signals, balance %s." % (
         out, len(led["trades"]), nopen, len(led["skipped"]), inr(led["balance"], True)))
@@ -908,6 +1176,7 @@ def main(argv=None):
     def common(p, ledger=True):
         p.add_argument("--config", default="trader/config.json")
         p.add_argument("--outbox", default="trader/state/notion_outbox.json")
+        p.add_argument("--sqlite", help="the database file (default: trader/trader.db, next to the config)")
         p.add_argument("--now", help="pretend it is this India time, e.g. \"2026-10-30 15:45\"")
         if ledger:
             p.add_argument("--mode", choices=["paper", "live"], default="paper")
@@ -941,10 +1210,16 @@ def main(argv=None):
     p.add_argument("--hash", help="the hash from pending --json; refuses if the row changed since")
     p = sub.add_parser("status", help="setup and outbox counts")
     common(p, False)
-    p = sub.add_parser("rebuild", help="restore the ledger from rows read back from Notion")
+    p = sub.add_parser("rebuild", help="restore the ledger (and the database) from rows read back from Notion")
     common(p)
     p.add_argument("--from", dest="src", required=True)
     p.add_argument("--force", action="store_true")
+    p.add_argument("--into-db", action="store_true", help="create trader.db if it was lost and import into it")
+    p = sub.add_parser("verify", help="compare counts and totals: the database against rows read back from Notion")
+    common(p)
+    p.add_argument("--from", dest="src", required=True)
+    p = sub.add_parser("requeue", help="restore Notion from the database: queue every row to be written again")
+    common(p, False)
     a = ap.parse_args(argv)
     if not a.cmd:
         ap.print_help()
@@ -952,7 +1227,7 @@ def main(argv=None):
     try:
         return {"schema": cmd_schema, "setup-save": cmd_setup_save, "queue": cmd_queue, "daily": cmd_daily,
                 "weekly": cmd_weekly, "pending": cmd_pending, "mark-sent": cmd_mark_sent, "status": cmd_status,
-                "rebuild": cmd_rebuild}[a.cmd](a)
+                "rebuild": cmd_rebuild, "verify": cmd_verify, "requeue": cmd_requeue}[a.cmd](a)
     except JournalError as e:
         print("journal.py: %s" % e, file=sys.stderr)
         return 1

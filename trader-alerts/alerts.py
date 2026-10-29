@@ -585,6 +585,28 @@ def cmd_quote(a):
     return 0 if quotes else 1
 
 
+def log_rings(state_path, rings, now_utc):
+    """Record each ring in trader/trader.db (the alerts table) when the database exists. A failure is shown."""
+    d = os.path.dirname(os.path.abspath(state_path))
+    if os.path.basename(d) == "state":
+        d = os.path.dirname(d)
+    path = os.path.join(d, "trader.db")
+    if not rings or not os.path.isfile(path):
+        return
+    try:
+        import sqlite3
+        conn = sqlite3.connect(path, timeout=30)
+        try:
+            for r in rings:
+                conn.execute("INSERT INTO alerts (at, rule, symbol, kind, detail) VALUES (?,?,?,?,?)",
+                             (now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), r.get("id"), r.get("symbol"), "ring", r.get("message")))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print("WARNING: could not log the alerts to %s: %s" % (path, e), file=sys.stderr)
+
+
 def cmd_check(a):
     doc = _read(a.rules, None)
     if not doc or not doc.get("rules"):
@@ -601,6 +623,7 @@ def cmd_check(a):
         _write(a.state, state)
         if quotes:
             write_prices(a.prices_out, quotes, now)
+        log_rings(a.state, rings, now)
     if a.json:
         print(json.dumps({"market": status, "rings": rings, "errors": errors,
                           "quotes": {s: q["price"] for s, q in quotes.items()}}, indent=2, ensure_ascii=False))

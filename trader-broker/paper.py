@@ -12,6 +12,7 @@ reads for the daily, weekly and drawdown limits.
     python3 paper.py skip --index 1                 # a no, or a trader-risk BLOCK: log the skipped signal
     python3 paper.py skip --from-plan --why "budget refused: reward:risk 1.20 after charges"
     python3 paper.py status                         # balance, open trades, today
+    python3 paper.py feel --trade PT-20261030-01 --text "nervous, held to the stop"   # after the exit
     python3 paper.py trades --json                  # the whole log
 
 The rules (your request of 2026-10-29):
@@ -56,6 +57,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import charges as chg  # noqa: E402  (a copy of trader-budget/charges.py; a test keeps the copies identical)
+import db  # noqa: E402  (a copy of trader-db/db.py; a test keeps the copies identical)
 
 UA = "Mozilla/5.0 (compatible; india-day-trader-skill/1.0)"
 HOSTS = ("query2", "query1")
@@ -243,6 +245,21 @@ def load_ledger(path, cfg):
     led.setdefault("trades", [])
     led.setdefault("skipped", [])
     return led
+
+
+def _store(a, cfg):
+    path = getattr(a, "db", None) or db.default_path(a.ledger)
+    st = db.LedgerStore(a.ledger, path, "paper", cfg, new_ledger, lambda p: read_json(p, "paper ledger", False),
+                        write_json, "paper")
+    return st
+
+
+def _load(a, cfg):
+    st = _store(a, cfg)
+    led = st.load()
+    for w in st.warnings:
+        print("WARNING: " + w, file=sys.stderr)
+    return st, led
 
 
 def _f(x):
@@ -475,7 +492,7 @@ def open_trade(led, order, approval, cfg, risk_res=None, tm_doc=None, news_tags=
          "tm_odds": tm_odds(tm_doc, sym, day), "risk_verdict": (risk_res or {}).get("verdict", "PASS"),
          "news_tags": list(news_tags or []), "approval": approval.get("reply"), "approved_at": approval.get("at"),
          "mode": "paper", "status": "open", "balance_after": None, "notes": "",
-         "fingerprint": approval.get("fingerprint"),
+         "fingerprint": approval.get("fingerprint"), "why": approval.get("why"),
          "booked_at": (now_utc or parse_now(None)).strftime("%Y-%m-%dT%H:%M:%SZ")}
     led["trades"].append(t)
     return t
@@ -647,7 +664,7 @@ def cmd_open(a):
         raise PaperError("order %d has no yes recorded today: ticket.py approve first. No yes, no trade." % a.index)
     if appr.get("mode") != "paper":
         raise PaperError("that yes was given in %s mode, not paper" % appr.get("mode"))
-    led = load_ledger(a.ledger, cfg)
+    st, led = _load(a, cfg)
     sym = str(order.get("symbol", "")).upper()
     if order.get("action") or order.get("entry_type") == "stop":
         raise PaperError("stop and cancel orders are for live mode; paper stops are simulated by reconcile")
@@ -657,17 +674,22 @@ def cmd_open(a):
             raise PaperError("no open paper trade in %s to sell" % sym)
         t["exit_request"] = {"at": appr["at"], "reply": appr.get("reply")}
         t["manual_exit_at"] = appr["at"]
-        write_json(a.ledger, led)
+        st.save(led, now)
         print("Recorded your yes to close %s %s. reconcile fills it at the next 1-minute bar's open." % (t["trade_id"],
                                                                                                     sym))
         return 0
+    blocks = db.control_blocks(a.config, "paper", today, st.db_path)
+    if blocks:
+        raise PaperError("; ".join(blocks))
     risk = read_json(a.risk, "risk check", required=False)
     rr = risk_result(risk, order, today)
     if not rr or rr.get("verdict") != "PASS":
         raise PaperError("trader-risk did not pass this exact order today: no paper trade")
     tm_doc = read_json(a.timemachine, "time machine", required=False)
     t = open_trade(led, order, appr, cfg, rr, tm_doc, a.news_tag, now)
-    write_json(a.ledger, led)
+    if st.uses_db:
+        t["order_id"] = db.order_for_fingerprint(st.db_path, appr.get("fingerprint"), today, "paper")
+    st.save(led, now)
     print("Booked paper trade %s: BUY %d %s, stop %.2f, target %.2f, flat by %s. No broker was contacted."
           % (t["trade_id"], t["qty"], sym, t["stop"], t["target"], t["flat_by"]))
     print("It fills at the open of the first 1-minute bar at or after your yes (%s), plus %.2f%% slippage. "
@@ -680,7 +702,7 @@ def cmd_skip(a):
     cfg = _cfg(a)
     now, now_ist = _clock(a)
     today = now_ist.date().isoformat()
-    led = load_ledger(a.ledger, cfg)
+    st, led = _load(a, cfg)
     if a.from_plan:
         s = read_json(a.sizing, "last sizing (run trader-budget size.py first)")
         if s.get("date") != today:
@@ -702,7 +724,7 @@ def cmd_skip(a):
             else:
                 raise PaperError("order %d was neither declined nor blocked today: give --why" % a.index)
     s = skip_signal(led, src, why, now_ist, cfg, now)
-    write_json(a.ledger, led)
+    st.save(led, now)
     print("Logged skipped signal %s: %s %s (%s). reconcile replays what would have happened."
           % (s["signal_id"], s["symbol"], s["qty"], why))
     return 0
@@ -712,7 +734,7 @@ def cmd_reconcile(a):
     cfg = _cfg(a)
     now, now_ist = _clock(a)
     day = a.date or now_ist.date().isoformat()
-    led = load_ledger(a.ledger, cfg)
+    st, led = _load(a, cfg)
     cache, synthetic = {}, []
 
     def bars_for(sym):
@@ -726,8 +748,15 @@ def cmd_reconcile(a):
         return cache[sym]
 
     cutoff = now_ist if now_ist.date().isoformat() == day else None
+    unfilled = {t["trade_id"] for t in led["trades"] if t.get("entry_fill") is None}
     report = reconcile(led, cfg, day, bars_for, cutoff, a.interval)
-    write_json(a.ledger, led)
+    st.save(led, now)
+    if st.uses_db:
+        for t in led["trades"]:
+            if t["trade_id"] in unfilled and t.get("entry_fill") is not None and t.get("order_id"):
+                db.record_order_event(st.db_path, t["order_id"], "filled", None,
+                                      "paper fill %.2f at %s" % (t["entry_fill"], t.get("entry_time")), now)
+        print("Database backup: %s" % db.backup(st.db_path, None, now_ist))
     if synthetic:
         print("SYNTHETIC test data, not market prices.")
     if not report:
@@ -745,11 +774,24 @@ def cmd_reconcile(a):
     return 0
 
 
+def cmd_feel(a):
+    """Store how you felt about a trade (asked after the exit). It is kept as a note on the trade."""
+    cfg = _cfg(a)
+    st, led = _load(a, cfg)
+    if not any(t["trade_id"] == a.trade for t in led["trades"]):
+        raise PaperError("no paper trade %s" % a.trade)
+    if not st.uses_db:
+        raise PaperError("notes are kept in the database: run db.py init and db.py migrate first")
+    db.add_note(st.db_path, a.trade, "feel", a.text, "paper", parse_now(getattr(a, "now", None)))
+    print("Saved how you felt about %s. It goes to the Notion journal at the next sync." % a.trade)
+    return 0
+
+
 def cmd_status(a):
     cfg = _cfg(a)
     now, now_ist = _clock(a)
     today = now_ist.date().isoformat()
-    led = load_ledger(a.ledger, cfg)
+    st, led = _load(a, cfg)
     closed = [t for t in led["trades"] if t["status"] == "closed"]
     today_net = sum(t["net_pnl"] for t in closed if t.get("exit_date") == today)
     if a.json:
@@ -770,7 +812,7 @@ def cmd_status(a):
 
 def cmd_trades(a):
     cfg = _cfg(a)
-    led = load_ledger(a.ledger, cfg)
+    st, led = _load(a, cfg)
     if a.json:
         print(json.dumps(led, indent=2, ensure_ascii=False))
         return 0
@@ -790,6 +832,7 @@ def main(argv=None):
     def common(p):
         p.add_argument("--config", default="trader/config.json")
         p.add_argument("--ledger", default="trader/state/paper.json")
+        p.add_argument("--db", help="default: trader/trader.db (next to the state folder)")
         p.add_argument("--now", help="pretend it is this India time, e.g. \"2026-10-30 15:45\"")
 
     p = sub.add_parser("open", help="book an approved order as a paper trade")
@@ -814,6 +857,10 @@ def main(argv=None):
     p.add_argument("--date", help="YYYY-MM-DD (default: today in India)")
     p.add_argument("--interval", choices=["1m", "5m"], default="1m")
     p.add_argument("--offline", metavar="PATH", help="a saved chart file or a folder of <SYMBOL>.json(.gz)")
+    p = sub.add_parser("feel", help="after the exit: how did you feel about the trade?")
+    common(p)
+    p.add_argument("--trade", required=True)
+    p.add_argument("--text", required=True)
     p = sub.add_parser("status", help="balance and open trades")
     common(p)
     p.add_argument("--json", action="store_true")
@@ -825,7 +872,7 @@ def main(argv=None):
         ap.print_help()
         return 1
     try:
-        return {"open": cmd_open, "skip": cmd_skip, "reconcile": cmd_reconcile, "status": cmd_status,
+        return {"open": cmd_open, "skip": cmd_skip, "reconcile": cmd_reconcile, "status": cmd_status, "feel": cmd_feel,
                 "trades": cmd_trades}[a.cmd](a)
     except PaperError as e:
         print("paper.py: %s" % e, file=sys.stderr)

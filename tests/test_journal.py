@@ -72,7 +72,11 @@ class Schema(unittest.TestCase):
         for c in ("Why skipped", "Hypothetical net P&L ₹", "Symbol", "Stop", "Target", "Risk at stop ₹"):
             self.assertIn(c, skipped_names)
         self.assertEqual([k for k in journal.DB_ORDER], ["paper_trades", "skipped_signals", "daily_summary",
-                                                         "weekly_reports"])
+                                                         "weekly_reports", "accounts", "orders", "capital_changes",
+                                                         "pauses", "discrepancies"])
+        for c in ("Why I took it", "How I felt", "Charges type", "Order ID", "Broker order ID"):
+            self.assertIn(c, names)
+        self.assertIn("Mode", dnames)
 
     def test_ddl_is_well_formed(self):
         for k in journal.DB_ORDER:
@@ -89,10 +93,11 @@ class Schema(unittest.TestCase):
     def test_schema_cli_names_the_parent_only_as_a_placeholder(self):
         code, out, _ = run(["schema", "--json", "--config", "none"])
         plan = json.loads(out)
-        self.assertEqual(plan["page"]["title"], "India Day Trader – Paper Trading")
+        self.assertEqual(plan["page"]["title"], "India Day Trader")
         self.assertIn("the page you name", json.dumps(plan))
         self.assertEqual([d["title"] for d in plan["databases"]],
-                         ["Paper Trades", "Skipped Signals", "Daily Summary", "Weekly Reports"])
+                         ["Trades", "Skipped Signals", "Daily Summary", "Weekly Reports", "Account", "Orders",
+                          "Capital Changes", "Pauses", "Discrepancies"])
 
 
 class Numbers(unittest.TestCase):
@@ -183,7 +188,7 @@ class Outbox(unittest.TestCase):
         code, out, _ = self.j("queue", "--now", "2026-10-30 15:51")
         self.assertIn("0 new, 0 changed, 3 unchanged", out)
         keys = sorted(r["key"] for r in self.pend())
-        self.assertEqual(keys, ["daily_summary:2026-10-30", "paper_trades:PT-20261030-01",
+        self.assertEqual(keys, ["daily_summary:paper:2026-10-30", "paper_trades:PT-20261030-01",
                                 "skipped_signals:SK-20261030-01"])
 
     def test_the_create_and_update_calls(self):
@@ -244,7 +249,7 @@ class Outbox(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("run the Notion setup first", err)
         code, out, _ = self.j("status")
-        self.assertIn("NOT done (0 of 4 databases saved)", out)
+        self.assertIn("NOT done (0 of 9 databases saved)", out)
 
     def test_setup_save_touches_only_the_notion_section(self):
         cfg = dict(CFG, max_loss_per_trade_inr=500)
@@ -253,7 +258,7 @@ class Outbox(unittest.TestCase):
         code, out, _ = run(["setup-save", "--config", self.p("config.json"), "--page-id", "PAGE",
                             "--db", "paper_trades=collection://abc", "--db", "daily_summary=def"])
         self.assertEqual(code, 0)
-        self.assertIn("Still missing: skipped_signals, weekly_reports", out)
+        self.assertIn("Still missing: skipped_signals, weekly_reports, accounts", out)
         with open(self.p("config.json")) as fh:
             saved = json.load(fh)
         self.assertEqual(saved["notion"]["databases"], {"paper_trades": "abc", "daily_summary": "def"})
@@ -267,13 +272,13 @@ class Outbox(unittest.TestCase):
         row = [r for r in self.pend() if r["db"] == "weekly_reports"][0]
         page = row["calls"][-1]["arguments"]["pages"][0]
         self.assertIn("## What happened", page["content"])
-        self.assertEqual(page["properties"]["Week"], "2026-W44 (Mon 2026-10-26 to Fri 2026-10-30)")
+        self.assertEqual(page["properties"]["Week"], "2026-W44 (Mon 2026-10-26 to Fri 2026-10-30) (paper)")
         self.assertEqual(page["properties"]["Balance vs start ₹"], -571.82)
 
     def test_a_day_with_no_trades_can_still_be_queued(self):
         code, out, _ = self.j("daily", "--date", "2026-10-29")
         self.assertIn("2026-10-29: no trades.", out)
-        self.assertTrue(any(r["key"] == "daily_summary:2026-10-29" for r in self.pend()))
+        self.assertTrue(any(r["key"] == "daily_summary:paper:2026-10-29" for r in self.pend()))
 
 
 class Rebuild(unittest.TestCase):

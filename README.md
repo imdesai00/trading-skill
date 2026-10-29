@@ -1,6 +1,6 @@
 # India Day Trader skill
 
-13 Claude skills for NSE day trading: scan charts, track news, time every entry and exit, replay every outcome, and paper trade first. Longs only, no leverage, your yes on every order.
+15 Claude skills for NSE day trading: scan charts, track news, time every entry and exit, replay every outcome, and paper trade first. Longs only, no leverage, your yes on every order.
 
 Free, MIT, no signup, no API key. The tools are plain Python (3.8 or newer, nothing to pip install) that read free public data: Yahoo Finance charts, NSE's equity list and RSS feeds, NIFTY index lists and Moneycontrol's RSS. Nothing in this pack can place an order on its own. **Paper trading is the default**, and it is the only mode you should use for the first four weeks.
 
@@ -8,19 +8,25 @@ Free, MIT, no signup, no API key. The tools are plain Python (3.8 or newer, noth
 
 > **Credit.** This is a conversion of [Jake Schincariol's day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill) (MIT) from US stocks to the Indian NSE cash market. The pipeline idea, the Time Machine algorithm and the skill structure are his. The NSE clock and holiday list, tick sizes, Zerodha charges, rupee formatting, the paper broker, the Notion journal, the Kite adapter, the go-live review, the results reader and the insider tracker are new here. His original MIT license and copyright notice are kept in `LICENSE`.
 
+## Documentation
+
+New here? Start with [docs/README.md](docs/README.md): [getting started](docs/GETTING_STARTED.md), [the daily routine](docs/DAILY_ROUTINE.md), [safety](docs/SAFETY.md), [the daily data files](docs/DATA_FILES.md), [Notion](docs/NOTION.md), [going live](docs/GO_LIVE.md), [architecture](docs/ARCHITECTURE.md), [troubleshooting](docs/TROUBLESHOOTING.md), and [an audit of this build against the specification](docs/AUDIT.md) (what is done, what differs, what is still missing).
+
 ## What it is
 
-NSE cash equity, intraday (MIS) only. Long side only: no shorts, no F&O, no margin, no leverage. Beginner-conservative limits, all in your `trader/config.json` and changed only by you (defaults for a ₹1,00,000 account):
+NSE cash equity, intraday (MIS) only. Long side only: no shorts, no F&O, no margin, no leverage. Beginner-conservative limits, all in your `trader/config.json`, stored as percent of capital and changed only by you or with your typed yes through `/trader-control` (defaults for a ₹1,00,000 account):
 
 | limit | default |
 | --- | --- |
-| max loss per trade, charges and slippage included, measured at the stop | ₹500 |
-| max loss per day / per week | ₹1,500 / ₹4,000 |
-| pause after falling this far below ₹1,00,000 | ₹8,000 |
+| max loss per trade, charges and slippage included, measured at the stop | 0.5% = ₹500 |
+| max loss per day / per week | 1.5% = ₹1,500 / 4% = ₹4,000 |
+| pause after falling this far below your baseline | 8% = ₹8,000 |
 | trades per day / open positions | 3 / 1 |
-| max position value, cash buffer | ₹75,000, 10 % |
+| max position value, cash buffer | 75% = ₹75,000, 10 % |
 | minimum reward:risk after charges; refuse if charges are over | 1.5; 25 % of the target profit |
 | no entries before / after, flat by | 09:30 / 14:45, 15:00 |
+| brakes | 2 losing exits in a row stop the day; 15 minutes cooldown after a loss |
+| half size | results day, event day, expiry day, India VIX above 20, NIFTY gap above 1%, and your first 2 live weeks |
 | paper slippage | 0.05 % a side |
 
 Two modes. **Paper** (the default) contacts no broker, ever. **Live** needs `"mode": "live"` AND `"kite_enabled": true`, both set by you in your config, plus a Kite connection verified that day. Nothing in this pack changes those two settings.
@@ -56,7 +62,7 @@ Run everything from one working folder. All state lands in `trader/` there. It i
 
 First time: `python3 trader-budget/size.py init` writes `trader/config.json` with the limits above.
 
-## The thirteen
+## The fifteen
 
 | command | job | what it does |
 | --- | --- | --- |
@@ -69,6 +75,8 @@ First time: `python3 trader-budget/size.py init` writes `trader/config.json` wit
 | `/trader-risk` | Risk Manager | PASS or BLOCK on the exact order against every limit. |
 | `/trader-broker` | Order Executor | Shows the ticket, records your yes, then books a paper trade (or prepares the exact Kite orders in live mode). |
 | `/trader-alerts` | Price Alerts | The NSE clock, quotes, and alerts for the stop, target, flat-by and the opening bell. |
+| `/trader-db` | Database | The local record of every order, your exact yes, every fill and trade: tamper-evident, with `check`, `backup`, `restore` and `export`. |
+| `/trader-control` | Controls | Change capital or limits (only with your typed yes), pause, the kill switch, and the morning check. |
 | `/trader-journal` | Notion Journal | Keeps the permanent paper-trading record in Notion through the Notion connector (never a token). |
 | `/trader-golive` | Go-Live Review | Reads the paper record plainly (is it luck?) and lists the steps you take yourself to go live. Decides nothing. |
 | `/trader-analyst` | Earnings Analyst | Reads a quarterly results table you paste: changes, margins, flags. No forecasts. |
@@ -80,12 +88,13 @@ The pipeline for one trade: `scanner -> news -> entry -> exit -> timemachine -> 
 
 | when (IST) | what |
 | --- | --- |
-| Before 09:15 | `/trader-news` on your watchlist (any RESULTS TODAY?), `/trader-insider check`, `scan.py daily` for the day's setups, `alerts.py add --opening-bell`. |
-| 09:30 to 14:45 | `scan.py orb`, then `entry.py check SYMBOL`. On a trigger: `exit.py plan --write`, `timemachine.py run --write`, `size.py --write`, `check.py`, `ticket.py show`. You say yes to that one order; `ticket.py approve`, then `paper.py open`. |
+| Before 09:15 | `/trader-control morning` (the morning check), load the daily files (`scan.py protect`, `scan.py market`; see [docs/DATA_FILES.md](docs/DATA_FILES.md)), `/trader-news` on your watchlist (any RESULTS TODAY?), `/trader-insider check`, `scan.py daily` for the day's setups. |
+| 09:30 to 14:45 | `scan.py orb`, then `entry.py check SYMBOL`. On a trigger: `exit.py plan --write`, `timemachine.py run --write`, `size.py --write`, `check.py`, `ticket.py show`. Claude asks "Why are you taking this trade?"; you answer and say yes to that one order; `ticket.py approve --why "..."`, then `paper.py open`. |
 | While a trade is open | `alerts.py add --from-plan`, `alerts.py quote`, `alerts.py check`. At the target alert or at 15:00, `ticket.py flatten` goes through risk and your yes too. |
-| After 15:30 | `paper.py reconcile`, then `/trader-journal`: queue, sync to Notion, read the daily summary. |
-| Friday | `/trader-journal weekly`. |
-| After four weeks and at least 40 trades | `golive.py check`, read it, decide for yourself. |
+| After 15:30 | `paper.py reconcile` (makes a database backup), `paper.py feel` ("How did you feel about it?"), then `/trader-journal`: queue, sync to Notion, `journal.py verify`, read the daily summary. |
+| Friday | `/trader-journal weekly`, `db.py check`. |
+| Any time | "change capital to ₹X", "pause trading until DATE", "resume trading", "kill switch": `/trader-control`. |
+| After four weeks and at least 40 trades | `golive.py check`, read it, decide for yourself ([docs/GO_LIVE.md](docs/GO_LIVE.md)). |
 
 ## A worked example (synthetic data, honestly)
 
@@ -142,6 +151,11 @@ python3 trader-broker/paper.py open --index 1                    # book the pape
 python3 trader-broker/paper.py reconcile                         # after the close
 python3 trader-alerts/alerts.py clock                            # is NSE open?
 python3 trader-journal/journal.py queue                          # then Claude syncs to Notion
+python3 trader-journal/journal.py verify --from trader/state/notion_export.json   # counts and totals, database vs Notion
+python3 trader-db/db.py check                                    # the database is intact? (also: backup, restore, export)
+python3 trader-control/control.py morning                        # the morning check
+python3 trader-scanner/scan.py protect --asm asm.csv --gsm gsm.csv --mis mis.csv --bands bands.csv
+python3 trader-scanner/scan.py market --fetch                    # India VIX and the NIFTY gap
 python3 trader-golive/golive.py check                            # the honest report
 python3 trader-analyst/results.py read results.txt --basis consolidated
 python3 trader-insider/insider.py import nse_insider_export.csv
@@ -178,20 +192,23 @@ Read `VERIFY.md`. It lists every assumption with its source and date and marks i
 ## Files
 
 ```
-trader-scanner/      SKILL.md, scan.py
+trader-scanner/      SKILL.md, scan.py, guards.py
 trader-news/         SKILL.md, news.py
 trader-entry/        SKILL.md, entry.py
 trader-exit/         SKILL.md, exit.py
 trader-timemachine/  SKILL.md, timemachine.py
-trader-budget/       SKILL.md, size.py, charges.py, config.example.json
-trader-risk/         SKILL.md, check.py, charges.py
-trader-broker/       SKILL.md, ticket.py, paper.py, kite.py, charges.py
+trader-budget/       SKILL.md, size.py, charges.py, db.py, guards.py, config.example.json
+trader-risk/         SKILL.md, check.py, charges.py, db.py, guards.py
+trader-broker/       SKILL.md, ticket.py, paper.py, kite.py, charges.py, db.py
 trader-alerts/       SKILL.md, alerts.py
-trader-journal/      SKILL.md, journal.py
-trader-golive/       SKILL.md, golive.py
+trader-journal/      SKILL.md, journal.py, db.py
+trader-db/           SKILL.md, db.py
+trader-control/      SKILL.md, control.py, db.py, guards.py
+trader-golive/       SKILL.md, golive.py, db.py
 trader-analyst/      SKILL.md, results.py
 trader-insider/      SKILL.md, insider.py
 tests/               unittest suite, synthetic fixtures, package.py, capture.py
+docs/                guides for new users, the audit against the specification
 PLAN.md, VERIFY.md   the plan and every assumption, with sources
 ```
 

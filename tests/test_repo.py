@@ -1,4 +1,5 @@
 import json
+import sys
 import os
 import re
 import unittest
@@ -8,8 +9,8 @@ from _load import ROOT
 # the India day-trading pack: thirteen skill folders
 SKILLS = ["trader-scanner", "trader-news", "trader-entry", "trader-exit", "trader-timemachine",
           "trader-risk", "trader-budget", "trader-broker", "trader-alerts", "trader-analyst",
-          "trader-insider", "trader-journal", "trader-golive"]
-ABOUT = ("13 Claude skills for NSE day trading: scan charts, track news, time every entry and exit, replay every "
+          "trader-insider", "trader-journal", "trader-golive", "trader-db", "trader-control"]
+ABOUT = ("15 Claude skills for NSE day trading: scan charts, track news, time every entry and exit, replay every "
          "outcome, and paper trade first. Longs only, no leverage, your yes on every order.")
 # skills on the way to an order carry the safety block
 ORDER_PATH = ["trader-scanner", "trader-entry", "trader-exit", "trader-timemachine", "trader-budget",
@@ -40,7 +41,7 @@ class Repo(unittest.TestCase):
 
     def test_root_matches_the_reel(self):
         root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git") and d not in ("__pycache__", "dist"))
-        self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "PLAN.md", "README.md", "VERIFY.md", "tests"] + SKILLS))
+        self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "PLAN.md", "README.md", "VERIFY.md", "docs", "tests"] + SKILLS))
 
     def test_frontmatter_name_and_description(self):
         for s in SKILLS:
@@ -203,6 +204,23 @@ class Secrets(unittest.TestCase):
 
 
 class Packaging(unittest.TestCase):
+    def run_each_script_alone(self, pkg, d):
+        """Unzip every skill by itself and run each of its scripts with -h in isolated mode: a missing copy of
+        db.py, guards.py or charges.py shows up here."""
+        import subprocess
+        import zipfile
+        for name in pkg.CONVERTED:
+            out = os.path.join(d, "unzipped", name)
+            os.makedirs(out)
+            with zipfile.ZipFile(os.path.join(d, name + ".zip")) as zf:
+                zf.extractall(out)
+            folder = os.path.join(out, name)
+            for f in sorted(os.listdir(folder)):
+                if f.endswith(".py"):
+                    r = subprocess.run([sys.executable, "-I", os.path.join(folder, f), "-h"], cwd=out,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+                    self.assertEqual(r.returncode, 0, "%s/%s: %s" % (name, f, r.stderr[-300:]))
+
     def test_every_converted_skill_packages_in_the_layout_claude_wants(self):
         import importlib.util
         import tempfile
@@ -221,6 +239,7 @@ class Packaging(unittest.TestCase):
                 self.assertIn(name + "/SKILL.md", names)
                 self.assertTrue(all(n.startswith(name + "/") for n in names), name)
                 self.assertFalse(any("__pycache__" in n or n.endswith(".pyc") for n in names), name)
+            self.run_each_script_alone(pkg, d)
             a, b = pkg.build("trader-risk", d), os.path.join(d, "again")
             with open(a, "rb") as fh:
                 first = fh.read()

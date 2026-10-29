@@ -15,7 +15,7 @@ check = load("trader-risk", "check")
 size = load("trader-budget", "size")
 PLAN = {"symbol": "SYNTHA", "side": "buy", "date": "2026-10-30", "setup": "orb", "entry": 1416.0,
         "entry_time": "09:50", "stop": 1408.0, "target": 1440.0, "tick": 0.1, "flat_by": "15:00"}
-LIVE = {"mode": "live", "kite_enabled": True}
+LIVE = {"mode": "live", "kite_enabled": True, "protection_data_required": False, "live_start_weeks": 0}   # these tests are about the gates, not the protections or the half-risk start
 NOW = "2026-10-30 09:51"
 ENTRY = size.order_from(size.size_trade(PLAN, {}, today="2026-10-30"), {})
 
@@ -26,6 +26,7 @@ class FakeKite(object):
     def __init__(self, buy_price=1416.7, sell_price=1424.0):
         self.orders, self.trades, self.calls, self.n = [], [], [], 0
         self.buy_price, self.sell_price, self.refuse = buy_price, sell_price, None
+        self.ltp, self.cash = 1416.2, 100000.0
 
     def __call__(self, tool, args):
         self.calls.append((tool, copy.deepcopy(args)))
@@ -33,6 +34,10 @@ class FakeKite(object):
             return copy.deepcopy(self.orders)
         if tool == "get_trades":
             return copy.deepcopy(self.trades)
+        if tool == "get_ltp":
+            return {k: {"instrument_token": 1, "last_price": self.ltp} for k in args["instruments"]}
+        if tool == "get_margins":
+            return {"equity": {"enabled": True, "net": self.cash, "available": {"live_balance": self.cash, "cash": self.cash}}}
         if tool == "get_profile":
             return {"user_id": "AB1234"}
         if tool == "get_positions":
@@ -122,7 +127,7 @@ class LiveBase(unittest.TestCase):
         """orders.json -> trader-risk -> your yes, the way a real session does it."""
         self.write("trader/orders.json", {"orders": [order]})
         code, out, _ = self.run_cli(check, ["--ledger", "trader/state/live.json", "--now", now])
-        code2, out2, err2 = self.run_cli(ticket, ["approve", "--index", "1", "--reply", reply, "--now", now + ":20"])
+        code2, out2, err2 = self.run_cli(ticket, ["approve", "--index", "1", "--reply", reply, "--why", "test: planned trade", "--now", now + ":20"])
         return code, code2, out, out2 + err2
 
 
@@ -204,7 +209,7 @@ class Gates(LiveBase):
         self.write("trader/config.json", {"mode": "paper"})
         self.write("trader/orders.json", {"orders": [ENTRY]})
         self.run_cli(check, ["--now", NOW])
-        self.run_cli(ticket, ["approve", "--index", "1", "--reply", "yes", "--now", NOW + ":20"])
+        self.run_cli(ticket, ["approve", "--index", "1", "--reply", "yes", "--why", "test", "--now", NOW + ":20"])
         self.write("trader/config.json", self.cfg)
         self.run_cli(check, ["--ledger", "trader/state/live.json", "--now", NOW])
         with self.assertRaises(kite.KiteError) as e:
@@ -383,25 +388,40 @@ class Cli(LiveBase):
     def test_check_writes_todays_state_only_when_live_and_enabled(self):
         self.write("trader/profile.json", {"data": {"user_id": "AB1234", "user_name": "X"}})
         os.remove("trader/state/kite.json")
-        code, out, _ = self.run_cli(kite, ["check", "--profile", "trader/profile.json", "--now", NOW])
+        self.write("trader/margins.json", {"equity": {"available": {"live_balance": 100000.0}}})
+        self.write("trader/positions.json", {"net": [], "day": []})
+        base = ["check", "--profile", "trader/profile.json", "--margins", "trader/margins.json", "--positions",
+                "trader/positions.json", "--now", NOW]
+        code, _, err = self.run_cli(kite, base)
+        self.assertEqual(code, 1)                                   # nobody confirmed the "Needs approval" setting
+        self.assertIn("Needs approval", err)
+        self.assertFalse(os.path.exists("trader/state/kite.json"))
+        code, out, _ = self.run_cli(kite, base + ["--tools-need-approval"])
         self.assertEqual(code, 0)
+        self.assertIn("expires every day", out)
         st = self.read("trader/state/kite.json")
         self.assertEqual((st["verified"], st["date"]), (True, "2026-10-30"))
         self.assertNotIn("AB1234", json.dumps(st))                 # no user details are kept
         self.write("trader/config.json", {"mode": "paper"})
-        code, _, err = self.run_cli(kite, ["check", "--profile", "trader/profile.json", "--now", NOW])
+        code, _, err = self.run_cli(kite, base + ["--tools-need-approval"])
         self.assertEqual(code, 1)
         self.assertIn("\"mode\" must be \"live\"", err)
         self.write("trader/config.json", dict(LIVE))
         self.write("trader/profile.json", {"error": "token expired"})
-        code, _, err = self.run_cli(kite, ["check", "--profile", "trader/profile.json", "--now", NOW])
+        code, _, err = self.run_cli(kite, base + ["--tools-need-approval"])
         self.assertIn("does not look like a Kite profile", err)
 
     def test_prepare_and_record(self):
         self.approve(ENTRY)
         self.write("trader/open_orders.json", [])
+        self.write("trader/ltp.json", {"NSE:SYNTHA": {"last_price": 1416.2}})
+        self.write("trader/margins.json", {"equity": {"available": {"live_balance": 100000.0}}})
+        extra = ["--ltp", "trader/ltp.json", "--margins", "trader/margins.json"]
         code, out, _ = self.run_cli(kite, ["prepare", "--index", "1", "--open-orders", "trader/open_orders.json",
                                            "--now", NOW])
+        self.assertEqual(code, 1)                                   # an entry is never placed without Kite's own price
+        code, out, _ = self.run_cli(kite, ["prepare", "--index", "1", "--open-orders", "trader/open_orders.json",
+                                           "--now", NOW] + extra)
         self.assertEqual(code, 0)
         self.assertIn('"tool": "place_order"', out)
         self.assertIn("Make exactly this one Kite tool call", out)
@@ -409,7 +429,7 @@ class Cli(LiveBase):
         self.assertEqual(code, 0)
         self.assertIn("The yes is used up", out)
         code, _, err = self.run_cli(kite, ["prepare", "--index", "1", "--open-orders", "trader/open_orders.json",
-                                           "--now", NOW])
+                                           "--now", NOW] + extra)
         self.assertEqual(code, 1)
         self.assertIn("already placed", err)
 

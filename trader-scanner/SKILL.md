@@ -142,6 +142,14 @@ README.md has the worked example on a real NSE stock once real data is captured.
 It never places, sizes or checks an order, never says which stock to buy,
 never calls data official, and never promises that a setup works.
 
+## Added (database edition)
+
+- `scan.py protect --asm F --gsm F --mis F --bands F` turns lists you exported into today's protection files.
+  `daily` and `orb` then drop ASM/GSM stocks and stocks that are not MIS-eligible, and say how many. If the lists are not
+  loaded for today, the scan says nothing was removed.
+- `scan.py market --fetch` (or `--vix 14.2 --gap 0.3`) saves India VIX and the NIFTY opening gap for the half-size rules.
+- Each scan is also logged in the database (scans table).
+
 ## Safety
 
 - Education and tooling, not financial advice. A PASS is a rules check, not a recommendation.
