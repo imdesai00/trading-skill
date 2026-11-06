@@ -16,6 +16,9 @@ Start here if you are new. Read the files in this order the first time; later, u
 | [ARCHITECTURE.md](ARCHITECTURE.md) | you want the code map, the database tables and the data flow |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | something printed an error or looks wrong |
 | [GLOSSARY.md](GLOSSARY.md) | a word is new to you (MIS, SL-M, ASM, R multiple ...) |
+| [ROADMAP.md](ROADMAP.md) | you want to know the three phases and the exit test for each |
+| [PHASE_2_UI.md](PHASE_2_UI.md) | planning the local dashboard (after real-data paper trading works) |
+| [PHASE_3_ZERODHA.md](PHASE_3_ZERODHA.md) | planning the Zerodha connection (last, and only after the paper period) |
 | [AUDIT.md](AUDIT.md) | you want to see this build checked against the specification, and what is still missing |
 
 Two facts to keep in mind everywhere:
