@@ -10,7 +10,7 @@ Free, MIT, no signup, no API key. The tools are plain Python (3.8 or newer, noth
 
 ## Documentation
 
-New here? Read [docs/HOW_TO_USE.md](docs/HOW_TO_USE.md) first (one page, start to finish), then the index in [docs/README.md](docs/README.md): [getting started](docs/GETTING_STARTED.md), [the daily routine](docs/DAILY_ROUTINE.md), [safety](docs/SAFETY.md), [the daily data files](docs/DATA_FILES.md), [Notion](docs/NOTION.md), [going live](docs/GO_LIVE.md), [architecture](docs/ARCHITECTURE.md), [troubleshooting](docs/TROUBLESHOOTING.md), and [an audit of this build against the specification](docs/AUDIT.md) (what is done, what differs, what is still missing).
+New here? Read [docs/HOW_TO_USE.md](docs/HOW_TO_USE.md) first (one page, start to finish), then the index in [docs/README.md](docs/README.md): [getting started](docs/GETTING_STARTED.md), [the daily routine](docs/DAILY_ROUTINE.md), [safety](docs/SAFETY.md), [the daily data files](docs/DATA_FILES.md), [Notion](docs/NOTION.md), [going live](docs/GO_LIVE.md), [architecture](docs/ARCHITECTURE.md), [troubleshooting](docs/TROUBLESHOOTING.md), [the roadmap](docs/ROADMAP.md) (Phase 2 dashboard, Phase 3 Zerodha), and [an audit of this build against the specification](docs/AUDIT.md) (what is done, what differs, what is still missing).
 
 ## What it is
 

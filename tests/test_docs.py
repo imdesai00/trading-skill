@@ -7,7 +7,7 @@ from _load import ROOT
 
 DOCS = os.path.join(ROOT, "docs")
 FILES = ["README.md", "HOW_TO_USE.md", "GETTING_STARTED.md", "DAILY_ROUTINE.md", "SKILLS.md", "SAFETY.md", "CONFIG.md", "DATA_FILES.md",
-         "NOTION.md", "GO_LIVE.md", "ARCHITECTURE.md", "TROUBLESHOOTING.md", "GLOSSARY.md", "AUDIT.md"]
+         "NOTION.md", "GO_LIVE.md", "ARCHITECTURE.md", "TROUBLESHOOTING.md", "GLOSSARY.md", "AUDIT.md", "ROADMAP.md", "PHASE_2_UI.md", "PHASE_3_ZERODHA.md"]
 
 
 def read(*parts):
@@ -84,6 +84,19 @@ class Docs(unittest.TestCase):
         self.assertIn("TOTP", text)
         self.assertIn("including Claude", text)
 
+    def test_the_roadmap_orders_the_phases_and_keeps_the_rules(self):
+        text = " ".join(read("docs", "ROADMAP.md").split())
+        self.assertLess(text.index("| 1 | Paper trading"), text.index("PHASE_2_UI.md"))
+        self.assertLess(text.index("PHASE_2_UI.md"), text.index("PHASE_3_ZERODHA.md"))
+        for want in ("Exit test for Phase 1", "Paper is the default", "typed yes", "No secrets"):
+            self.assertIn(want, text, want)
+        ui = " ".join(read("docs", "PHASE_2_UI.md").split())
+        for want in ("127.0.0.1", "read-only", "No order endpoints exist", "never decide"):
+            self.assertIn(want, ui.replace("Principle: look and plan, never decide", "never decide"), want)
+        z = " ".join(read("docs", "PHASE_3_ZERODHA.md").split())
+        for want in ("Not financial advice", "Rollback", "never stores or prints a key", "Needs approval", "kite_enabled"):
+            self.assertIn(want, z, want)
+
     def test_every_command_line_in_the_docs_names_a_real_script(self):
         scripts = set()
         for d in os.listdir(ROOT):
@@ -92,7 +105,7 @@ class Docs(unittest.TestCase):
         for f in FILES:
             for m in re.finditer(r"\b([a-z_]+\.py)\b", read("docs", f)):
                 name = m.group(1)
-                if name in ("sec_list.py",):
+                if name in ("sec_list.py", "ui.py"):
                     continue
                 self.assertIn(name, scripts | {"package.py", "capture.py"}, "%s mentions %s" % (f, name))
 
