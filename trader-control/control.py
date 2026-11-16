@@ -16,7 +16,7 @@ How changes work. Every limit is stored as a percent of capital (config "limits_
 derived. A change is two steps: this tool first SHOWS old and new side by side and writes nothing; only a
 second call with --reply yes (the user's typed yes, which Claude must pass word for word) writes it. A write
 updates trader/config.json, records the old and new values in the database (config_history, capital_changes)
-and queues the row for Notion. This tool never changes "mode" or "kite_enabled": switching to live is yours.
+and shows in the reports. This tool never changes "mode", "broker" or an "*_enabled" switch: switching to live is yours.
 Capital changes are deposits or withdrawals: they move the balance and reset the drawdown baseline, and are
 kept apart from trading profit and loss so the statistics stay honest. In live mode the new capital can never
 be more than what Kite shows as available (--kite-available, from get_margins).
@@ -316,7 +316,7 @@ def cmd_capital(a):
     db.set_account(p["db"], mode, capital=new, balance=acct["balance"] + delta, baseline=new, now=now)
     db.log_config(p["db"], cfg, "tool", "capital %s -> %s: %s" % (old, new, a.reason), now)
     print("Done. Capital is %s, the balance %s, the baseline reset to %s. Recorded in capital_changes and "
-          "config_history; /trader-journal syncs it to Notion." % (inr(new), inr(acct["balance"] + delta, True), inr(new)))
+          "config_history." % (inr(new), inr(acct["balance"] + delta, True), inr(new)))
     jp = os.path.join(p["state"], "paper.json" if mode == "paper" else "live.json")
     led = read_json(jp)
     if led is not None:
@@ -486,9 +486,6 @@ def cmd_morning(a):
         folder = os.path.join(p["base"], "backups")
         lines.append("Last backup: %s." % (sorted(os.listdir(folder))[-1] if os.path.isdir(folder) and os.listdir(folder)
                                            else "none yet (db.py backup)"))
-        pend = [r for r in db.load_outbox(p["db"]) if r.get("sent_hash") != r.get("hash")]
-        lines.append("Notion sync: %s." % ("up to date" if not pend else "%d row%s waiting to be sent (/trader-journal)" % (
-            len(pend), "" if len(pend) == 1 else "s")))
     else:
         lines.append("No database yet (%s): run size.py init, or db.py init and db.py migrate." % p["db"])
         for r in db.control_blocks(a.config, mode, today, None):

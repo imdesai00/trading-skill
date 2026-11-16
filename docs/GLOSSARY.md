@@ -37,7 +37,6 @@
 | **contract note** | the broker's official statement of your trades and exact charges |
 | **hash chain** | each database row stores a code made from the row before it, so changing or removing a row in the middle is detectable |
 | **append-only** | rows can be added but not changed or deleted. Corrections are new rows |
-| **outbox** | the waiting list of rows to be written to Notion |
 | **kill switch** | the file `trader/STOP`: while it exists, no new order can be made |
 | **Allow once** | Claude's own permission card that appears before a broker order tool runs |
 | **TOTP** | the six-digit code from an authenticator app, used for two-factor login. Never share it |

@@ -1,4 +1,4 @@
-# Your working folder: trades, state, prices. Notion is the permanent record.
+# Your working folder: trades, state, prices. The database and backups are the permanent record.
 trader/
 
 # Anything that could hold a secret. Kite keys and access tokens live in

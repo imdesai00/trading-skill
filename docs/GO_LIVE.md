@@ -8,7 +8,7 @@ Do not read this page until you have finished the paper period: about four weeks
 python3 <pack>/trader-golive/golive.py check
 ```
 
-It prints, for the paper record: the number of trades (with a warning under 40), net result after charges, win rate, average R, expectancy per trade, deepest drawdown, longest losing streak, how often limits were hit or a rule broken, the charges paid, how your skipped signals compare, and whether the result can be told apart from luck at this sample size. With a few dozen trades it usually cannot. It never says "ready" or "not ready". Read the Notion record yourself too.
+It prints, for the paper record: the number of trades (with a warning under 40), net result after charges, win rate, average R, expectancy per trade, deepest drawdown, longest losing streak, how often limits were hit or a rule broken, the charges paid, how your skipped signals compare, and whether the result can be told apart from luck at this sample size. With a few dozen trades it usually cannot. It never says "ready" or "not ready". Read the daily reports yourself too.
 
 Most individual intraday traders lose money. A good paper month is weak evidence; a flat or negative one is a reason to keep learning on paper.
 
@@ -45,7 +45,7 @@ An entry is **one super order**: the entry, the stop-loss and the target togethe
 
 After placing: `dhan.py sync` with the saved orders, trades and positions results. Act on every WARNING line at once. After 15:30: `dhan.py reconcile` compares Dhan with the record. Dhan wins. Differences land in the Discrepancies table and are shown to you. When the contract note arrives, enter its charges: `dhan.py set-charges --trade ID --amount X`.
 
-Everything goes to the same Notion journal with Mode = live; the Live Account row shows Dhan's real balance and positions.
+Everything goes to the same database with mode live, kept apart from paper; the live account shows Dhan's real balance and positions.
 
 ## 4. Stopping
 

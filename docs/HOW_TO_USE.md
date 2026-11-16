@@ -4,14 +4,14 @@ This is the single page to read first. It tells you what to say to Claude, what 
 
 ## The idea in four sentences
 
-You talk to Claude in plain words ("run the morning check", "scan for breakouts"). Claude runs the small Python tools in this pack and explains the results. **Nothing places an order unless a risk check passes and you type a plain "yes" for that one order.** For the first four weeks you only practise on paper: a simulated account, kept in a local database and mirrored in Notion. Real money (Zerodha Kite) is a separate decision you make yourself, much later.
+You talk to Claude in plain words ("run the morning check", "scan for breakouts"). Claude runs the small Python tools in this pack and explains the results. **Nothing places an order unless a risk check passes and you type a plain "yes" for that one order.** For the first four weeks you only practise on paper: a simulated account, kept in a local database. Real money (Zerodha Kite) is a separate decision you make yourself, much later.
 
 ## Part 1: set up once (an afternoon)
 
 1. Make an empty folder (for example `~/trading`) and start Claude Code, Cowork or Claude Desktop in it. Add the skills ([GETTING_STARTED.md](GETTING_STARTED.md), step 2).
 2. Say: **"Create my config and database."** Claude runs `size.py init`. You now have your limits for a ₹1,00,000 account: max loss ₹500 a trade, ₹1,500 a day, ₹4,000 a week, pause at ₹8,000 below your start, 3 trades a day, 1 position at a time.
 3. Say: **"Check the database."** It should say the database is intact.
-4. Connect Notion in Claude's Connectors screen, then say: **"Set up the Notion journal."** Claude asks which Notion page to use. Name one. Never give Claude or any tool a Notion token.
+4. Reports need no setup: they are written from the database.
 5. Turn on two-factor login (TOTP) at your broker (Dhan) now, and never share a broker key, password or code with anyone, including Claude.
 
 ## Part 2: every trading morning (before 09:15)
@@ -20,7 +20,7 @@ Say these one at a time and read the answers:
 
 | you say | what happens |
 | --- | --- |
-| "Run the morning check." | Market open or closed, mode (PAPER), balance, week so far, limits used, pause or kill switch, events, VIX, whether Notion and the database are fine. |
+| "Run the morning check." | Market open or closed, mode (PAPER), balance, week so far, limits used, pause or kill switch, events, VIX, whether the database is fine. |
 | "Load today's protection files." | You give Claude the ASM/GSM list, the MIS list and the price bands you saved from NSE and Zerodha ([DATA_FILES.md](DATA_FILES.md)). Skipping this means the circuit, surveillance and MIS checks cannot run. |
 | "Get today's VIX and NIFTY gap." | Saves India VIX and the opening gap; a high VIX or a big gap makes the day half size. |
 | "News on my watchlist." | Headlines from Yahoo, NSE and Moneycontrol. **RESULTS TODAY** next to a stock means half size for it. |
@@ -54,8 +54,7 @@ Expect most days to end at step 5 or 6. With ₹500 of risk and the broker's cha
 
 1. **"Reconcile today."** Claude replays the day's bars, decides whether the stop, the target or the flat-by time came first (if both in one bar, the stop wins), applies full charges, and makes a database backup.
 2. Claude asks: **"How did you feel about it?"** Answer honestly.
-3. **"Sync to Notion."** Claude writes each waiting row through the Notion connector, then reads Notion back and compares counts and totals with your database. You should see "Everything agrees".
-4. **"Show today's summary."** Plain words: trades, wins and losses, net after charges, balance, limits hit.
+3. **"Show today's summary."** Plain words: trades, wins and losses, net after charges, balance, limits hit.
 
 ## Part 6: every Friday
 

@@ -1,8 +1,8 @@
 # VERIFY.md: what was checked, how, and what is still unverified
 
 Checked on **2026-10-29** (Thursday) from a cloud build sandbox, for the India
-conversion of day-trader-skill (NSE cash, intraday MIS, Zerodha Kite later,
-Notion journal).
+conversion of day-trader-skill (NSE cash, intraday MIS, Dhan, FYERS or Zerodha Kite later,
+local reports).
 
 ## Read this first: how much of this is really verified
 
@@ -170,25 +170,10 @@ open the SEBI page and confirm.
 Sources: https://www.business-standard.com/markets/news/over-70-intra-day-traders-incur-losses-during-fy23-reveals-sebi-study-124072401110_1.html,
 https://moneylife.in/article/7-out-of-10-individual-intraday-traders-in-equity-cash-segment-make-losses-sebi-study/74733.html.
 
-## 8. Notion connector (VERIFIED in this session)
+## 8. Notion (REMOVED)
 
-The Notion connector's tool schemas were loaded and read in this Claude session
-on 2026-10-29. Tool names as Claude sees them here: `notion-search`,
-`notion-fetch`, `notion-create-database`, `notion-create-pages`,
-`notion-update-page`, `notion-query-data-sources`, `notion-update-data-source`
-(plus others not needed). Your Cowork session may show them under a different
-prefix; the names after the prefix should match.
-
-| need | tool | notes |
-| --- | --- | --- |
-| Find the parent page you name | `notion-search`, `notion-fetch` | |
-| Create a page under a parent | `notion-create-pages` with `parent: {page_id}` | |
-| Create the 4 databases | `notion-create-database` with `parent: {page_id}` and a SQL DDL `schema` (`CREATE TABLE ("Trade ID" TITLE, "Net P&L ₹" NUMBER, "Exit reason" SELECT(...), ...)`) | returns a `collection://` data source id; that id is what goes in config |
-| Add a row | `notion-create-pages` with `parent: {data_source_id}` | dates as `date:Date:start`; numbers as numbers |
-| Update a row | `notion-update-page` `command: update_properties` with the row's page id | the outbox stores the page id once a row is created, so updates never duplicate |
-| Find a row by Trade ID / rebuild | `notion-query-data-sources`: `rows` mode (max 100 rows, no cursor), `view` mode (100 a page, with a cursor), or `sql` mode | SQL mode has a shared workspace quota on non-Business plans, so rebuild uses `view` mode with paging |
-
-Not used: any Notion API token. The scripts never call Notion.
+Notion was removed from the pack. Nothing in the code calls it, no config key refers to it, and nothing needs verifying.
+Daily and weekly reports are now local files (`trader-report/report.py`, saved in `trader/reports/`).
 
 ## 9. Yahoo Finance for NSE (.NS)
 
@@ -264,7 +249,7 @@ None of these could be fetched from the build sandbox. Every fixture for them is
 
 ## 13. What the whole build did NOT test against reality
 
-No real NSE, Yahoo, Moneycontrol, Zerodha or Notion call was made by the tests. Real calls happen first on your machine. The first things to look at: `scan.py universe` (did the CSVs download and parse?), one `entry.py check` on a real symbol after 09:35, `news.py` (which of the three feeds answered?), the first Notion sync (did the database schema create?), and `alerts.py quote RELIANCE` against Kite's price. `tests/capture.py` saves real Yahoo bars so the synthetic fixtures can be replaced.
+No real NSE, Yahoo, Moneycontrol, Zerodha, Dhan or FYERS call was made by the tests. Real calls happen first on your machine. The first things to look at: `scan.py universe` (did the CSVs download and parse?), one `entry.py check` on a real symbol after 09:35, `news.py` (which of the three feeds answered?), `report.py daily` (does the report read right?), and `alerts.py quote RELIANCE` against Kite's price. `tests/capture.py` saves real Yahoo bars so the synthetic fixtures can be replaced.
 
 ## 14. Protection data, expiry day and the Kite order-read figures (database edition, 2026-10-29)
 

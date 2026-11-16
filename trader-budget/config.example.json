@@ -63,10 +63,5 @@
     "sebi_per_crore_inr": 10.0,
     "stamp_buy_pct": 0.003,
     "gst_pct": 18.0
-  },
-  "notion": {
-    "parent_page_id": null,
-    "page_id": null,
-    "databases": {}
   }
 }

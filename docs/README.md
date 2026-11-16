@@ -11,7 +11,6 @@ Start here if you are new. Read the files in this order the first time; later, u
 | [SAFETY.md](SAFETY.md) | you want to know what stops a bad trade (and what does not) |
 | [CONFIG.md](CONFIG.md) | you want to change a setting, or understand one |
 | [DATA_FILES.md](DATA_FILES.md) | you need the daily ASM/GSM, MIS, price-band and VIX files |
-| [NOTION.md](NOTION.md) | you are setting up or fixing the Notion journal |
 | [GO_LIVE.md](GO_LIVE.md) | four weeks of paper trading are done and you are thinking about real money |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | you want the code map, the database tables and the data flow |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | something printed an error or looks wrong |

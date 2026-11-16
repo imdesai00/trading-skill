@@ -10,7 +10,7 @@ You chose Dhan instead of Zerodha on 2026-11-16. The analysis (what Dhan offers,
 - A live trade is **one super order** (entry, stop-loss and target legs). Leaving early is cancel (own yes) then sell (own yes).
 - The `securityId` map builder (`dhan.py securities`), the connection check (`dhan.py check`), `prepare`, `record`, `sync`, `reconcile`, `set-charges`, `prices`, `status`.
 - Routing by `"broker"` in the ticket, the approval hash and the risk check; the switches `broker` and `dhan_enabled` are yours alone (`control.py` refuses them).
-- Everything shared with Zerodha: the live ledger in the database, order events, fills, discrepancies, the live reconcile, actual charges, the Live Account in Notion, the first-two-weeks half risk, the 0.3% price rule, the cash check, the kill switch and pause.
+- Everything shared with Zerodha: the live ledger in the database, order events, fills, discrepancies, the live reconcile, actual charges, the live account in the database, the first-two-weeks half risk, the 0.3% price rule, the cash check, the kill switch and pause.
 - Tested only against `FakeDhan` in `tests/test_dhan.py`.
 
 ## What is missing: the real connection
@@ -28,7 +28,7 @@ You chose Dhan instead of Zerodha on 2026-11-16. The analysis (what Dhan offers,
 5. **Fix the adapter to the real shapes**: update the field spellings in `dhan.py`, add the real samples to `tests/test_dhan.py`, keep every existing test passing.
 6. **Dry run, no order**: `dhan.py check`, read orders, trades, positions and funds, run `reconcile` on an account with no activity.
 7. **Smallest real order**: one share of a liquid stock through the whole chain (risk PASS, typed yes, Allow once card, the super order, the stop or target leg, the exit). Compare every field with Dhan's own order book and trade book. Enter the contract-note charges.
-8. **Two-week half-risk period** at ₹250 a trade (enforced by the pack), with the Live Account in Notion and a reconcile every day.
+8. **Two-week half-risk period** at ₹250 a trade (enforced by the pack), with the live account kept in the database and a reconcile every day.
 9. **Review**: live against paper (slippage, fills, charges), from the separate live record.
 
 ## Prerequisites (all must be true before any live order)
@@ -41,7 +41,7 @@ You chose Dhan instead of Zerodha on 2026-11-16. The analysis (what Dhan offers,
 
 ## Security rules (non-negotiable)
 
-- Tokens, passwords, client secrets and TOTP codes never go into the chat, the repository, the database, Notion, logs or this pack's config. If a route needs a credential, it lives in an environment variable or in the connector's own configuration that you edit. The adapter reads none, and `dhan.py check` stores no account detail.
+- Tokens, passwords, client secrets and TOTP codes never go into the chat, the repository, the database, logs or this pack's config. If a route needs a credential, it lives in an environment variable or in the connector's own configuration that you edit. The adapter reads none, and `dhan.py check` stores no account detail.
 - No tool asks for them. If anything does, stop.
 - `mode`, `broker`, `dhan_enabled` and `kite_enabled` are set only by you, by hand. `control.py` refuses them.
 - No order from a scheduled or background task. Each live order is one risk PASS, one typed yes, one Allow once card.

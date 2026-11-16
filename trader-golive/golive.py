@@ -162,7 +162,7 @@ def analyse(led, cfg):
     n = len(trades)
     out = {"capital": capital, "n": n, "min_trades": c["min_trades_for_review"],
            "open": sum(1 for t in led.get("trades", []) if t.get("status") in ("open", "pending_fill")),
-           "skipped": len(led.get("skipped", [])), "rebuilt": bool(led.get("rebuilt_from_notion")),
+           "skipped": len(led.get("skipped", [])),
            "period_weeks": c["paper_period_weeks"]}
     if n == 0:
         return out
@@ -291,9 +291,7 @@ def report_lines(a):
     L.append("  - Paper fills are kinder than real ones: real stops slip, market orders move the price, and you")
     L.append("    will take longer than a minute to type yes.")
     L.append("  - A few weeks is one market mood. A different month can behave differently.")
-    L.append("  - It counts the trades you took. Trades you skipped, and the days you did not trade, are in Notion.")
-    if a["rebuilt"]:
-        L.append("  - This record was rebuilt from Notion: open trades came back without their internal details.")
+    L.append("  - It counts the trades you took. Trades you skipped, and the days you did not trade, are in the database and the daily reports.")
     L.append("")
     L.append("Most intraday traders lose money: SEBI's study of FY2022-23, as reported in the press (the sebi.gov.in")
     L.append("page itself was not checked), found about 7 in 10 individual intraday traders in the cash segment lost")
@@ -368,7 +366,7 @@ def _steps_fyers(half_risk):
 def _steps_dhan(half_risk):
     return [
         ("Decide", [
-            "Read the report above and the Notion record yourself. Go live only if YOU are satisfied. If the "
+            "Read the report above and your daily and weekly reports (report.py) yourself. Go live only if YOU are satisfied. If the "
             "result sat inside the noise, that is a reason to keep paper trading, not to stop reading the report.",
             "Decide the most you can lose, in money you can afford to lose, before you connect anything."]),
         ("Connect Dhan (only you do this)", [
@@ -403,7 +401,7 @@ def _steps_dhan(half_risk):
             "Sync after the fills: dhan.py sync with the saved orders, trades and positions results; after 15:30 run "
             "dhan.py reconcile. Act on every WARNING and DISCREPANCY line at once."]),
         ("Keep the record", [
-            "Keep logging every live trade in Notion with Mode = live: journal.py queue --mode live, then sync.",
+            "Every live trade is in the database with Mode = live: run report.py weekly --mode live each Friday.",
             "Compare the live results with the paper record each Friday. Real slippage will show up there."]),
         ("Only then think about full size", [
             "After 2 weeks at %s per trade, look at the live record the same way as this report. Whether to go "
@@ -413,7 +411,7 @@ def _steps_dhan(half_risk):
 def _steps_kite(half_risk):
     return [
         ("Decide", [
-            "Read the report above and the Notion record yourself. Go live only if YOU are satisfied. If the "
+            "Read the report above and your daily and weekly reports (report.py) yourself. Go live only if YOU are satisfied. If the "
             "result sat inside the noise, that is a reason to keep paper trading, not to stop reading the report.",
             "Decide the most you can lose, in money you can afford to lose, before you connect anything."]),
         ("Connect Kite (only you do this)", [
@@ -449,7 +447,7 @@ def _steps_kite(half_risk):
             "Sync after the fills: kite.py sync with the saved get_orders / get_trades / get_positions results. "
             "Act on every WARNING line at once (no stop, rejected stop, position mismatch)."]),
         ("Keep the record", [
-            "Keep logging every live trade in Notion with Mode = live: journal.py queue --mode live, then sync.",
+            "Every live trade is in the database with Mode = live: run report.py weekly --mode live each Friday.",
             "Compare the live results with the paper record each Friday. Real slippage will show up there."]),
         ("Only then think about full size", [
             "After 2 weeks at %s per trade, look at the live record the same way as this report. Whether to go "

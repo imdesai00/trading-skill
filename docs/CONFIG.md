@@ -79,7 +79,7 @@ you type a different rupee value by hand, the percent wins and the tools tell yo
 | `paper_period_weeks` | 4 | how long to paper trade before reviewing |
 | `min_trades_for_review` | 40 | `golive.py` warns under this many trades |
 
-## Orders, universe, charges, Notion
+## Orders, universe, charges
 
 | key | default | meaning |
 | --- | --- | --- |
@@ -89,7 +89,6 @@ you type a different rupee value by hand, the percent wins and the tools tell yo
 | `universe_index` | `"nifty100"` | `nifty50`, `nifty100`, `nifty500` or `all` |
 | `min_price_inr`, `min_avg_volume` | 50, 500000 | price and liquidity floors for scans |
 | `charges` | rates and date | Zerodha's intraday charges. Check them against zerodha.com/charges; the tools say when they were last checked |
-| `notion` | ids | filled in by the Notion setup; no secrets |
 
 ## Files in `trader/state/` that the tools read
 

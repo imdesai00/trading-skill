@@ -6,11 +6,11 @@ Free, MIT, no signup, no API key. The tools are plain Python (3.8 or newer, noth
 
 > **Not financial advice.** Most individual intraday traders lose money (SEBI's study of FY2022-23, as reported in the press: about 7 in 10 in the cash segment; the sebi.gov.in page itself was not checked). You can lose money. This is software that reads public data and does arithmetic.
 
-> **Credit.** This is a conversion of [Jake Schincariol's day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill) (MIT) from US stocks to the Indian NSE cash market. The pipeline idea, the Time Machine algorithm and the skill structure are his. The NSE clock and holiday list, tick sizes, Zerodha charges, rupee formatting, the paper broker, the Notion journal, the Kite adapter, the go-live review, the results reader and the insider tracker are new here. His original MIT license and copyright notice are kept in `LICENSE`.
+> **Credit.** This is a conversion of [Jake Schincariol's day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill) (MIT) from US stocks to the Indian NSE cash market. The pipeline idea, the Time Machine algorithm and the skill structure are his. The NSE clock and holiday list, tick sizes, Zerodha charges, rupee formatting, the paper broker, the local database and reports, the Dhan, FYERS and Kite adapters, the go-live review, the results reader and the insider tracker are new here. His original MIT license and copyright notice are kept in `LICENSE`.
 
 ## Documentation
 
-New here? Read [docs/HOW_TO_USE.md](docs/HOW_TO_USE.md) first (one page, start to finish), then the index in [docs/README.md](docs/README.md): [getting started](docs/GETTING_STARTED.md), [the daily routine](docs/DAILY_ROUTINE.md), [safety](docs/SAFETY.md), [the daily data files](docs/DATA_FILES.md), [Notion](docs/NOTION.md), [going live](docs/GO_LIVE.md), [architecture](docs/ARCHITECTURE.md), [troubleshooting](docs/TROUBLESHOOTING.md), [the roadmap](docs/ROADMAP.md) (Phase 2 dashboard, Phase 3 Dhan, with [the Dhan analysis](docs/DHAN.md)), and [an audit of this build against the specification](docs/AUDIT.md) (what is done, what differs, what is still missing).
+New here? Read [docs/HOW_TO_USE.md](docs/HOW_TO_USE.md) first (one page, start to finish), then the index in [docs/README.md](docs/README.md): [getting started](docs/GETTING_STARTED.md), [the daily routine](docs/DAILY_ROUTINE.md), [safety](docs/SAFETY.md), [the daily data files](docs/DATA_FILES.md), [going live](docs/GO_LIVE.md), [architecture](docs/ARCHITECTURE.md), [troubleshooting](docs/TROUBLESHOOTING.md), [the roadmap](docs/ROADMAP.md) (Phase 2 dashboard, Phase 3 Dhan, with [the Dhan analysis](docs/DHAN.md)), and [an audit of this build against the specification](docs/AUDIT.md) (what is done, what differs, what is still missing).
 
 ## What it is
 
@@ -77,22 +77,22 @@ First time: `python3 trader-budget/size.py init` writes `trader/config.json` wit
 | `/trader-alerts` | Price Alerts | The NSE clock, quotes, and alerts for the stop, target, flat-by and the opening bell. |
 | `/trader-db` | Database | The local record of every order, your exact yes, every fill and trade: tamper-evident, with `check`, `backup`, `restore` and `export`. |
 | `/trader-control` | Controls | Change capital or limits (only with your typed yes), pause, the kill switch, and the morning check. |
-| `/trader-journal` | Notion Journal | Keeps the permanent paper-trading record in Notion through the Notion connector (never a token). |
+| `/trader-report` | Reports | Daily and weekly reports from the local record, saved as Markdown files, paper and live kept apart. |
 | `/trader-golive` | Go-Live Review | Reads the paper record plainly (is it luck?) and lists the steps you take yourself to go live. Decides nothing. |
 | `/trader-analyst` | Earnings Analyst | Reads a quarterly results table you paste: changes, margins, flags. No forecasts. |
 | `/trader-insider` | Insider Tracker | Reads SEBI PIT insider disclosures from a CSV you export from NSE, alerts once per filing, shows how late each is. |
 
 ## Your day
 
-The pipeline for one trade: `scanner -> news -> entry -> exit -> timemachine -> budget -> risk -> yes -> paper fill`, with alerts watching the open trade and the journal recording the day.
+The pipeline for one trade: `scanner -> news -> entry -> exit -> timemachine -> budget -> risk -> yes -> paper fill`, with alerts watching the open trade and the database recording the day.
 
 | when (IST) | what |
 | --- | --- |
 | Before 09:15 | `/trader-control morning` (the morning check), load the daily files (`scan.py protect`, `scan.py market`; see [docs/DATA_FILES.md](docs/DATA_FILES.md)), `/trader-news` on your watchlist (any RESULTS TODAY?), `/trader-insider check`, `scan.py daily` for the day's setups. |
 | 09:30 to 14:45 | `scan.py orb`, then `entry.py check SYMBOL`. On a trigger: `exit.py plan --write`, `timemachine.py run --write`, `size.py --write`, `check.py`, `ticket.py show`. Claude asks "Why are you taking this trade?"; you answer and say yes to that one order; `ticket.py approve --why "..."`, then `paper.py open`. |
 | While a trade is open | `alerts.py add --from-plan`, `alerts.py quote`, `alerts.py check`. At the target alert or at 15:00, `ticket.py flatten` goes through risk and your yes too. |
-| After 15:30 | `paper.py reconcile` (makes a database backup), `paper.py feel` ("How did you feel about it?"), then `/trader-journal`: queue, sync to Notion, `journal.py verify`, read the daily summary. |
-| Friday | `/trader-journal weekly`, `db.py check`. |
+| After 15:30 | `paper.py reconcile` (makes a database backup), `paper.py feel` ("How did you feel about it?"), then `/trader-report daily` (your "why" and "how I felt" are in it). |
+| Friday | `/trader-report weekly`, `db.py check`, `db.py backup`. |
 | Any time | "change capital to ₹X", "pause trading until DATE", "resume trading", "kill switch": `/trader-control`. |
 | After four weeks and at least 40 trades | `golive.py check`, read it, decide for yourself ([docs/GO_LIVE.md](docs/GO_LIVE.md)). |
 
@@ -119,16 +119,9 @@ REFUSED: reward:risk after charges is 1.20, under your minimum 1.5. No order.
 
 A textbook 2R setup, refused. At this size on a ₹1,416 stock, charges and slippage eat 40 % of the reward:risk, so the budget manager says no and `paper.py skip --from-plan` logs it as a skipped signal. That is the design working: with ₹500 of risk, many trades are not worth taking.
 
-## Notion setup (once)
-
-1. Connect Notion in Claude (Settings, Connectors). Never give any tool a Notion token.
-2. Tell `/trader-journal` which Notion page should hold the record. It asks; nothing is created before you name the page. It then creates "India Day Trader - Paper Trading" with four databases: Paper Trades, Skipped Signals, Daily Summary and Weekly Reports.
-3. After each day it syncs through the connector. Each row is created once and then updated by its Trade ID, never duplicated. Anything that could not be sent stays queued.
-4. If you lose your `trader/` folder, `/trader-journal rebuild` restores the ledger from Notion.
-
 ## Going live (only after the paper trial)
 
-Do not do this early. `golive.py steps` prints the full list (`--broker kite` for the Zerodha version), and [docs/DHAN.md](docs/DHAN.md) and [docs/PHASE_3_DHAN.md](docs/PHASE_3_DHAN.md) explain the Dhan route. In short: read `golive.py check` and the Notion record yourself (a result that sits inside the noise is a reason to keep paper trading); connect Dhan's MCP connector yourself (reported address `https://mcp.dhan.co/mcp`; approve its consent screen yourself and never paste a token anywhere); set every order tool (place, super order, modify, cancel, forever orders) to "Needs approval"; build the symbol map with `dhan.py securities`; fill in Dhan's real tool names in `dhan_tools`; re-verify the items in the `RECHECK-AT-DHAN` list in `VERIFY.md` (none of Dhan's tool names, fields or rules was read from Dhan's own pages); then edit your own config to `"mode": "live"`, `"broker": "dhan"`, `"dhan_enabled": true` and `max_loss_per_trade_inr` of 250 (half the paper risk) for the first two weeks.
+Do not do this early. `golive.py steps` prints the full list (`--broker kite` for the Zerodha version), and [docs/DHAN.md](docs/DHAN.md) and [docs/PHASE_3_DHAN.md](docs/PHASE_3_DHAN.md) explain the Dhan route. In short: read `golive.py check` and the daily reports yourself (a result that sits inside the noise is a reason to keep paper trading); connect Dhan's MCP connector yourself (reported address `https://mcp.dhan.co/mcp`; approve its consent screen yourself and never paste a token anywhere); set every order tool (place, super order, modify, cancel, forever orders) to "Needs approval"; build the symbol map with `dhan.py securities`; fill in Dhan's real tool names in `dhan_tools`; re-verify the items in the `RECHECK-AT-DHAN` list in `VERIFY.md` (none of Dhan's tool names, fields or rules was read from Dhan's own pages); then edit your own config to `"mode": "live"`, `"broker": "dhan"`, `"dhan_enabled": true` and `max_loss_per_trade_inr` of 250 (half the paper risk) for the first two weeks.
 
 A live Dhan trade is **one super order**: the entry, the stop-loss and the target travel together as one request, so there is one ticket, one risk check, one typed yes and one Allow once card, and the stop exists from the moment the entry fills. The entry is a limit order (`size.py --limit`). Leaving early is two steps, each with its own yes: cancel the super order, then sell. (The Zerodha adapter keeps its older three-order design: entry, then a separate resting stop, then exit.)
 
@@ -150,8 +143,8 @@ python3 trader-broker/ticket.py approve --index 1 --reply "yes"  # your yes, for
 python3 trader-broker/paper.py open --index 1                    # book the paper trade
 python3 trader-broker/paper.py reconcile                         # after the close
 python3 trader-alerts/alerts.py clock                            # is NSE open?
-python3 trader-journal/journal.py queue                          # then Claude syncs to Notion
-python3 trader-journal/journal.py verify --from trader/state/notion_export.json   # counts and totals, database vs Notion
+python3 trader-report/report.py daily                            # the day in plain words, saved in trader/reports/
+python3 trader-report/report.py weekly                           # the Friday report
 python3 trader-db/db.py check                                    # the database is intact? (also: backup, restore, export)
 python3 trader-control/control.py morning                        # the morning check
 python3 trader-scanner/scan.py protect --asm asm.csv --gsm gsm.csv --mis mis.csv --bands bands.csv
@@ -165,11 +158,11 @@ python3 trader-insider/insider.py import nse_insider_export.csv
 python3 -m unittest discover -s tests -v
 ```
 
-The tests run offline on synthetic fixtures and on mocks of Dhan, Kite and Notion. They check the arithmetic (charges, tick rounding, sizing, limits), the safety gates (a stop that leaks, a yes that names a different order, live mode with the switches off making zero Kite calls) and that every skill folder works on its own. `tests/capture.py` fetches real Yahoo bars on your own machine so you can replace the synthetic fixtures.
+The tests run offline on synthetic fixtures and on mocks of Dhan, FYERS and Kite. They check the arithmetic (charges, tick rounding, sizing, limits), the safety gates (a stop that leaks, a yes that names a different order, live mode with the switches off making zero Kite calls) and that every skill folder works on its own. `tests/capture.py` fetches real Yahoo bars on your own machine so you can replace the synthetic fixtures.
 
 ## What is not verified
 
-Read `VERIFY.md`. It lists every assumption with its source and date and marks it verified, secondary or unverified. The big ones: the Yahoo `.NS` response shape and delay; the NSE and Moneycontrol RSS URLs and the column names of NSE's CSVs; Dhan's MCP tool names and result fields, whether its order APIs need a static IP on your route, how a super order cancels, and the 2026 SEBI retail-algo rules; the charge rates (check against dhan.co/pricing); the Notion database column names with characters like ₹ and &. The tools say so when they depend on one of these, and the 2027 holiday list is not in the tool, so it refuses to run for 2027 dates until you add it.
+Read `VERIFY.md`. It lists every assumption with its source and date and marks it verified, secondary or unverified. The big ones: the Yahoo `.NS` response shape and delay; the NSE and Moneycontrol RSS URLs and the column names of NSE's CSVs; Dhan's MCP tool names and result fields, whether its order APIs need a static IP on your route, how a super order cancels, and the 2026 SEBI retail-algo rules; the charge rates (check against dhan.co/pricing). The tools say so when they depend on one of these, and the 2027 holiday list is not in the tool, so it refuses to run for 2027 dates until you add it.
 
 ## Fine print
 
@@ -201,7 +194,7 @@ trader-budget/       SKILL.md, size.py, charges.py, db.py, guards.py, config.exa
 trader-risk/         SKILL.md, check.py, charges.py, db.py, guards.py
 trader-broker/       SKILL.md, ticket.py, paper.py, dhan.py, kite.py, charges.py, db.py
 trader-alerts/       SKILL.md, alerts.py
-trader-journal/      SKILL.md, journal.py, db.py
+trader-report/       SKILL.md, report.py, db.py
 trader-db/           SKILL.md, db.py
 trader-control/      SKILL.md, control.py, db.py, guards.py
 trader-golive/       SKILL.md, golive.py, db.py

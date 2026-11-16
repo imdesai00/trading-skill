@@ -1,7 +1,7 @@
 # Getting started
 
 This takes about an afternoon. You do not need to know how to program. You do need: a computer, Python 3.8 or newer, Claude (Claude
-Code, Claude Cowork or Claude Desktop with skills), and a Notion account if you want the journal (you do).
+Code, Claude Cowork or Claude Desktop with skills).
 
 ## 1. Check Python
 
@@ -44,10 +44,9 @@ python3 <path-to-pack>/trader-db/db.py check
 
 It should say the database is intact.
 
-## 5. Connect Notion (the journal)
+## 5. Reports
 
-Connect Notion to Claude through Claude's Connectors screen. **Never give a Notion token to any tool in this pack**; it never asks. Then
-tell Claude "set up the Notion journal" and name the Notion page where it may create things. Details are in [NOTION.md](NOTION.md).
+Nothing to connect. `report.py daily` and `report.py weekly` write plain Markdown reports into `trader/reports/` from the local database.
 
 ## 6. Try the safe things first
 
@@ -82,4 +81,4 @@ the pack working: with ₹500 of risk and the broker's charges, many trades are 
 ## What "done" looks like for week one
 
 You can run the morning check without help, you have loaded the protection files at least twice, you have seen a trade refused and understood why,
-you have paper-traded at least one setup from start to finish, `db.py check` passes, and the Notion journal shows the day.
+you have paper-traded at least one setup from start to finish, `db.py check` passes, and `report.py daily` shows the day.

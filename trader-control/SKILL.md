@@ -10,7 +10,7 @@ description: >-
   switch") blocks every new order at once and, in live mode, lists open
   positions and offers to flatten them (each needing its own yes). The morning
   check prints market open or closed, mode, balance, week P&L, limits used,
-  pauses, events, India VIX, results today, scan and news status, Notion sync
+  pauses, events, India VIX, results today, scan and news status, report status
   and database health. Use when the user says "morning check", "good morning",
   "change capital", "change my limit", "pause trading", "resume", "kill
   switch", "stop everything", or "what is my status".
@@ -45,7 +45,7 @@ Run `control.py morning` first thing, read it back in short plain sentences and 
 market open or closed (and why), the mode in capitals, balance and week P&L, how much of the daily and weekly
 limit is used, any pause or kill switch, events (budget day, index expiry, RBI days from your `events.json`),
 results due today, India VIX, whether the protection files are loaded (ASM/GSM, MIS list, price bands),
-the last scan and news check, whether Notion is up to date, whether the database passed its check, and the
+the last scan and news check, whether the last backup is recent, whether the database passed its check, and the
 age of the last backup. It also logs any hand edit of `trader/config.json`. End with the reminder to use
 Zerodha's TOTP two-factor login and never to share Kite credentials with anyone, including Claude.
 

@@ -35,7 +35,7 @@ The super order also fixes a gap flagged in [AUDIT.md](AUDIT.md): the Zerodha de
 
 ## 3. What stays exactly the same
 
-Paper mode and everything before the broker: the scanner, news, entry, exit, time machine, budget, risk check, the ticket, your typed yes with a "why", the database, the Notion journal, the controls and the protections. All safety rules are unchanged: paper by default; `mode` and the broker switches set only by you; a risk PASS on that exact order, your typed yes for that one order and Claude's Allow once card; no secrets anywhere in the pack; no order from a scheduled task.
+Paper mode and everything before the broker: the scanner, news, entry, exit, time machine, budget, risk check, the ticket, your typed yes with a "why", the database, the local reports, the controls and the protections. All safety rules are unchanged: paper by default; `mode` and the broker switches set only by you; a risk PASS on that exact order, your typed yes for that one order and Claude's Allow once card; no secrets anywhere in the pack; no order from a scheduled task.
 
 ## 4. The integration plan
 

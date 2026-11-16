@@ -10,7 +10,7 @@ from _load import load, ROOT, ist
 SCRIPTS = [("trader-alerts", "alerts"), ("trader-scanner", "scan"), ("trader-entry", "entry"),
            ("trader-exit", "exit"), ("trader-timemachine", "timemachine"), ("trader-budget", "size"),
            ("trader-risk", "check"), ("trader-broker", "ticket"), ("trader-broker", "paper"),
-           ("trader-journal", "journal"), ("trader-news", "news"), ("trader-insider", "insider"),
+           ("trader-report", "report"), ("trader-news", "news"), ("trader-insider", "insider"),
            ("trader-control", "control")]
 START = "# ---------------------------------------------------------------- NSE clock (same block in every script)"
 END = "# ---------------------------------------------------------------- end NSE clock"
@@ -164,7 +164,7 @@ class StandaloneSkills(unittest.TestCase):
         def body(folder):
             with open(os.path.join(ROOT, folder, "db.py"), encoding="utf-8") as fh:
                 return fh.read()
-        for folder in ("trader-broker", "trader-risk", "trader-journal", "trader-golive", "trader-budget",
+        for folder in ("trader-broker", "trader-risk", "trader-report", "trader-golive", "trader-budget",
                        "trader-control"):
             self.assertEqual(body(folder), body("trader-db"), folder)
 

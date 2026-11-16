@@ -19,14 +19,14 @@ after the checks in VERIFY.md. Nothing in the skills has been changed yet.
 ## Design decisions (say no to any of these)
 
 1. **Keep the pipeline, folders and file handoff.** Add three skill folders:
-   `trader-journal` (Notion outbox, sync, rebuild, daily summary, weekly
+   `trader-report` (daily summary, weekly
    report), `trader-golive` (golive.py) and `trader-insider` (replaces
    trader-pelosi).
 2. **Clock:** IST is a fixed UTC+05:30 with no daylight saving, so the time code
    gets simpler. The NSE calendar (holidays, CAS, Muhurat) is copied into each
    script like upstream does, plus a new test that fails if any copy differs.
 3. **One charges calculator**, `trader-budget/charges.py`, imported by budget,
-   risk, paper broker and journal (a second copy of the rates is how they
+   risk, paper broker and report (a second copy of the rates is how they
    drift apart). Rates are read from `trader/config.json` `charges`, with the
    date they were checked.
 4. **Config:** your limits become the code defaults and ship in
@@ -62,8 +62,7 @@ after the checks in VERIFY.md. Nothing in the skills has been changed yet.
    reward:risk ≥ 1.5 after charges, charges ≤ 25% of target profit, no
    shorts / no margin, entry window 09:30 to 14:45, live mode refused unless
    `kite_enabled` and a verified Kite connection. Exits are never blocked.
-9. **Notion:** scripts only write `trader/state/notion_outbox.json` (each row:
-   database, Trade ID, properties, `notion_page_id` once created, `sent`).
+9. **Reports:** `trader-report/report.py` writes the daily and weekly reports as Markdown in `trader/reports/` (Notion was removed).
    Claude sends rows with the connector tools in VERIFY.md section 8, records
    the page id, and updates by page id after that, so nothing duplicates. Rebuild
    pages through each database (`view` mode) and recreates the local log.
@@ -73,7 +72,7 @@ after the checks in VERIFY.md. Nothing in the skills has been changed yet.
 11. **Muhurat and other special sessions are not traded** by default.
 12. **Tests:** every converted script keeps its test classes; US fixtures are
     replaced by NSE ones. The trader-pelosi tests go with trader-pelosi (you
-    asked for it to be replaced); trader-insider gets its own. Kite and Notion
+    asked for it to be replaced); trader-insider gets its own. Kite
     steps are tested against mocks. I report the test count each phase.
 
 ## Phases (I stop after each, run the tests and show you the results)
@@ -85,7 +84,7 @@ after the checks in VERIFY.md. Nothing in the skills has been changed yet.
    calculator and trader-broker's ticket.py (the yes gate) on the new order format.
 3. Paper broker, charges calculator, end-of-day reconcile, skipped signals. **(done;
    slippage in limits and SL-M confirmed 2026-10-29)**
-4. Notion setup, outbox sync, rebuild, daily summary, weekly report. **(done)**
+4. Daily summary and weekly report, local files. **(done; Notion removed later)**
 5. Kite adapter (disabled, mock-tested) + golive.py check / steps. **(done)**
 6. News (Yahoo .NS + NSE RSS if reachable + Moneycontrol RSS, added on your request
    of 2026-10-29), analyst (pasted results), insider (NSE PIT RSS). Moneycontrol's
@@ -162,4 +161,4 @@ See the last commit message and the README. Phase 6 replaced the US news, SEC-fa
 
 ## Second pass (2026-10-29): the full specification
 
-You sent a fuller specification (SQLite as the source of truth, percent limits, capital and kill-switch control, India protections, Kite live checks and reconcile, nine Notion databases, docs). It was audited against the build: see docs/AUDIT.md. The gaps were filled in this order: database (trader-db), controls (trader-control), protections (guards.py in risk, budget and scanner), Notion extension, live additions, docs.
+You sent a fuller specification (SQLite as the source of truth, percent limits, capital and kill-switch control, India protections, Kite live checks and reconcile, docs). It was audited against the build: see docs/AUDIT.md. The gaps were filled in this order: database (trader-db), controls (trader-control), protections (guards.py in risk, budget and scanner), live additions, docs.

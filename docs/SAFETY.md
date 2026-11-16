@@ -9,7 +9,7 @@ worst moment, so read it once.
 | --- | --- | --- |
 | broker contacted | never | Zerodha Kite, through the Kite MCP server |
 | needs | nothing | you set `"mode": "live"`, `"broker": "dhan"` and `"dhan_enabled": true` yourself, Dhan connected and checked today |
-| record | the database, and the Notion Paper Account | the database, and the Notion Live Account read from the broker |
+| record | the database (paper account) | the database (live account read from the broker) |
 
 If `mode` is live but the broker is not verified today, every order is refused and the tool says why. No tool ever changes `mode`, `broker`, `dhan_enabled`, `fyers_enabled` or `kite_enabled`.
 
@@ -49,7 +49,7 @@ Exits are never blocked by the day limits, the window, or the kill switch. Getti
 ## Capital, limits, pause and the kill switch
 
 - **Change capital or a limit**: ask Claude. It shows old and new values side by side and changes nothing until you type a plain yes. Every change is recorded (what, when,
-  why) in the database and Notion. Raising a risk limit prints a warning. Changing capital during the paper test prints another.
+  why) in the database. Raising a risk limit prints a warning. Changing capital during the paper test prints another.
 - **In live mode, capital can never be more than Kite shows as available.**
 - **Pause**: "pause trading until 6 November" blocks new orders in both modes; scans, news and exits still work. "resume trading" ends it.
 - **Kill switch**: say "kill switch" or create a file named `STOP` in `trader/`. No new order is possible in either mode until the file is removed. In live mode Claude lists
@@ -82,4 +82,4 @@ Exits are never blocked by the day limits, the window, or the kill switch. Getti
 ## Where the record lives and how it is protected
 
 Orders, approvals, fills, trades and the rest are append-only and hash-chained in `trader/trader.db` (see [ARCHITECTURE.md](ARCHITECTURE.md)). `db.py check` finds an edited or removed
-row. Notion holds a readable copy and `journal.py verify` compares the two. Dated backups are made after every reconcile.
+row. Dated backups are made after every reconcile.

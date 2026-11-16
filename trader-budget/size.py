@@ -613,7 +613,6 @@ def cmd_init(a):
     doc["limits_pct"] = dict(guards.DEFAULT_PCT)
     doc.update(guards.derive_inr(doc["capital_inr"], doc["limits_pct"]))
     doc["charges"] = dict(chg.DEFAULT_RATES)
-    doc["notion"] = {"parent_page_id": None, "page_id": None, "databases": {}}
     with open(a.config, "w", encoding="utf-8") as fh:
         json.dump(doc, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
