@@ -1,6 +1,6 @@
 # Configuration: `trader/config.json`
 
-`size.py init` writes this file. You may edit it with any text editor; the tools never change `mode` or `kite_enabled`, and change nothing else
+`size.py init` writes this file. You may edit it with any text editor; the tools never change `mode`, `broker`, `dhan_enabled` or `kite_enabled`, and change nothing else
 unless you say yes to `control.py`. If you edit the file by hand, the next `check.py` or `control.py morning` notices and records the edit in the
 database (`config_history`), so there is a trail.
 
@@ -13,7 +13,10 @@ you type a different rupee value by hand, the percent wins and the tools tell yo
 | key | default | meaning |
 | --- | --- | --- |
 | `mode` | `"paper"` | `"paper"` contacts no broker, ever. `"live"` is used only together with `kite_enabled` and a Kite check from today. |
-| `kite_enabled` | `false` | the second switch for live trading. Both are set by you. |
+| `broker` | `"dhan"` | which live broker the pack uses: `"dhan"` (the plan) or `"kite"` (Zerodha, kept as an alternative; also what a config without this key means). Set by you |
+| `dhan_enabled` | `false` | the second switch for live trading with Dhan. Live also needs a Dhan check from today. Set by you |
+| `kite_enabled` | `false` | the same switch for the Zerodha route (`"broker": "kite"`). Set by you |
+| `dhan_tools` | `{}` | Dhan's real MCP tool names, once you have read the connector's tool list. Keys you may set: `profile`, `orders`, `positions`, `trades`, `place`, `place_super`, `cancel`, `cancel_super`, `ltp`, `margins`, `holdings`. Anything you leave out uses a guessed default |
 
 ## Capital and limits
 
@@ -63,6 +66,7 @@ you type a different rupee value by hand, the percent wins and the tools tell yo
 | `event_days` | {} | extra half-size days you name, like `{"2026-11-06": "RBI policy"}` |
 | `blocked` | [] | symbols you never want to trade |
 | `index_expiry_weekday`, `budget_day`, `half_size_factor` | optional | expiry weekday (Monday is 0; default Tuesday), the budget date as `"02-01"`, and the factor (default 0.5). Not written by `init`; add them only to change the defaults |
+| `dhan_securities_file` | optional | where the symbol-to-securityId map is (default `trader/state/dhan_securities.json`; built by `dhan.py securities`). Not written by `init` |
 | `live_price_move_pct` | optional | live mode: how far Kite's price may be from the plan before a new yes is needed (default 0.3). Not written by `init` |
 
 ## Paper trading and review
@@ -91,4 +95,4 @@ you type a different rupee value by hand, the percent wins and the tools tell yo
 
 ## The two things the tools will never write
 
-`mode` and `kite_enabled`. To go live you edit them yourself, after [GO_LIVE.md](GO_LIVE.md).
+`mode`, `broker`, `dhan_enabled` and `kite_enabled`. To go live you edit them yourself, after [GO_LIVE.md](GO_LIVE.md).

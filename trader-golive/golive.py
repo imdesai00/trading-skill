@@ -54,6 +54,22 @@ RECHECK = [
     "Whether Yahoo's .NS quotes match Kite's prices closely enough to size trades on.",
 ]
 
+RECHECK_DHAN = [
+    "The real tool list of Dhan's MCP connector (reported address https://mcp.dhan.co/mcp), and which tools place, modify, "
+    "cancel or exit orders, including super orders and forever orders. Put the real names in \"dhan_tools\" in your config.",
+    "Whether Dhan's order APIs need a registered static IP on your route (the API pages say they do) and whether it is registered.",
+    "The access login: how long it lasts and how you connect each morning (the API token is documented as 24 hours).",
+    "That a super order (entry, stop-loss and target legs) works for NSE equity INTRADAY, and what cancelling it does to its legs.",
+    "That an entry as a LIMIT super order fills as the docs say; Dhan converts API market orders to limit orders with price protection.",
+    "The numeric securityId for each symbol you trade, from Dhan's instrument list (python3 dhan.py securities --csv FILE).",
+    "The field names in get_orders, get_trades, get_positions, the funds result and the last-price result (VERIFY.md section 15).",
+    "Dhan's intraday auto square-off time (its own pages disagree: 3:10, 3:18 and 3:20 PM) against your flat_by.",
+    "Every rate in the charges table in trader/config.json, against dhan.co/pricing today.",
+    "Tick size per symbol against the NSE band table.",
+    "Whether Yahoo's .NS quotes match Dhan's prices closely enough to size trades on.",
+]
+DHAN_TOOLS_APPROVAL = ["the place-order tool", "the place-super-order tool", "the modify tools", "the cancel tools (order and "
+                       "super order)", "any forever-order (GTT) tool", "any exit-all or square-off tool"]
 KITE_TOOLS_APPROVAL = ["place_order", "modify_order", "cancel_order", "place_gtt_order", "modify_gtt_order",
                        "delete_gtt_order"]
 KITE_TOOLS_READONLY = ["get_profile", "get_orders", "get_trades", "get_order_history", "get_order_trades",
@@ -288,7 +304,58 @@ def report_lines(a):
 
 # ---------------------------------------------------------------- the steps
 
-def steps(half_risk=250):
+def steps(half_risk=250, broker="dhan"):
+    if broker == "dhan":
+        return _steps_dhan(half_risk)
+    return _steps_kite(half_risk)
+
+
+def _steps_dhan(half_risk):
+    return [
+        ("Decide", [
+            "Read the report above and the Notion record yourself. Go live only if YOU are satisfied. If the "
+            "result sat inside the noise, that is a reason to keep paper trading, not to stop reading the report.",
+            "Decide the most you can lose, in money you can afford to lose, before you connect anything."]),
+        ("Connect Dhan (only you do this)", [
+            "Dhan describes a first-party MCP server (reported address https://mcp.dhan.co/mcp) that can place, modify "
+            "and cancel orders, including super orders. Add it to Claude yourself and approve its consent screen yourself.",
+            "Never paste a token, password, client secret or TOTP code into a chat, and never put one in this folder. "
+            "If a route needs credentials, they live in environment variables or in a config you edit yourself.",
+            "Read on Dhan's own site what API and MCP access needs: any subscription, and the static-IP rule for order "
+            "APIs (and whether your route needs it)."]),
+        ("Set every order tool to \"Needs approval\"", [
+            "In Claude (Customize > Connectors > the Dhan connector > tool permissions) set each of these to Needs "
+            "approval, never Always allow: " + ", ".join(DHAN_TOOLS_APPROVAL) + ".",
+            "Read-only tools (profile, funds, orders, trades, positions, quotes) may stay on Always allow."]),
+        ("Map symbols to Dhan's securityIds", [
+            "Download Dhan's instrument list yourself, then: python3 trader-broker/dhan.py securities --csv FILE. "
+            "An order for a symbol with no id is refused."]),
+        ("Re-verify what could not be verified", ["Check each of these against the live docs and your account:"] +
+         ["[ ] " + x for x in RECHECK_DHAN]),
+        ("Switch it on yourself, at half the paper risk", [
+            "Edit trader/config.json yourself (the tools never do): set \"mode\": \"live\", \"broker\": \"dhan\", "
+            "\"dhan_enabled\": true and \"max_loss_per_trade_inr\": %d for the first 2 weeks live, half the paper risk."
+            % half_risk,
+            "At half the risk the shares halve, so charges are a bigger share of each small target: expect more "
+            "trades refused by the 25 % charges rule. That is the rule working.",
+            "Leave the daily, weekly and drawdown limits as they are unless you decide otherwise."]),
+        ("Every live day", [
+            "Connect Dhan yourself, save the profile, funds and positions results, then: dhan.py check --profile F "
+            "--margins F --positions F --tools-need-approval --static-ip-confirmed.",
+            "An entry is ONE super order (entry, stop-loss and target together): one trader-risk check, one typed yes, "
+            "one Allow once card. Entries are limit orders (size.py --limit). Leaving early is two steps, each with its "
+            "own yes: cancel the super order, then sell. Never \"yes to all\"; never from a scheduled task.",
+            "Sync after the fills: dhan.py sync with the saved orders, trades and positions results; after 15:30 run "
+            "dhan.py reconcile. Act on every WARNING and DISCREPANCY line at once."]),
+        ("Keep the record", [
+            "Keep logging every live trade in Notion with Mode = live: journal.py queue --mode live, then sync.",
+            "Compare the live results with the paper record each Friday. Real slippage will show up there."]),
+        ("Only then think about full size", [
+            "After 2 weeks at %s per trade, look at the live record the same way as this report. Whether to go "
+            "back to the full per-trade risk is your decision, made by editing your own config." % inr(half_risk)])]
+
+
+def _steps_kite(half_risk):
     return [
         ("Decide", [
             "Read the report above and the Notion record yourself. Go live only if YOU are satisfied. If the "
@@ -334,15 +401,16 @@ def steps(half_risk=250):
             "back to the full per-trade risk is your decision, made by editing your own config." % inr(half_risk)])]
 
 
-def steps_lines(half_risk=250):
+def steps_lines(half_risk=250, broker="dhan"):
     L = ["Going live: the steps YOU take, in order. Nothing here is done for you, and nothing switches itself on.", ""]
-    for i, (title, items) in enumerate(steps(half_risk), 1):
+    for i, (title, items) in enumerate(steps(half_risk, broker), 1):
         L.append("%d. %s" % (i, title))
         for it in items:
             L.append("   - " + it if not it.startswith("[ ]") else "   " + it)
         L.append("")
     L.append("Config you will edit yourself (shown, not written):")
-    L.append('   "mode": "live", "kite_enabled": true, "max_loss_per_trade_inr": %d' % half_risk)
+    L.append('   "mode": "live", %s, "max_loss_per_trade_inr": %d' % (
+        '"broker": "dhan", "dhan_enabled": true' if broker == "dhan" else '"kite_enabled": true', half_risk))
     L.append("Not financial advice. Real money can be lost.")
     return L
 
@@ -371,9 +439,9 @@ def cmd_check(a):
 
 def cmd_steps(a):
     if a.json:
-        print(json.dumps([{"title": t, "items": i} for t, i in steps(a.half_risk)], indent=2, ensure_ascii=False))
+        print(json.dumps([{"title": t, "items": i} for t, i in steps(a.half_risk, a.broker)], indent=2, ensure_ascii=False))
     else:
-        print("\n".join(steps_lines(a.half_risk)))
+        print("\n".join(steps_lines(a.half_risk, a.broker)))
     return 0
 
 
@@ -389,6 +457,7 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("steps", help="the steps you take yourself to go live")
     p.add_argument("--half-risk", type=int, default=250)
+    p.add_argument("--broker", choices=["dhan", "kite"], default="dhan")
     p.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if not a.cmd:

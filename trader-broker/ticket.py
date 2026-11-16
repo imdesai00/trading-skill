@@ -367,6 +367,19 @@ def kind_of(order, rv):
     return "entry" if str(order.get("side", "")).lower() == "buy" else "exit"
 
 
+def broker_of(cfg):
+    """Which live broker the config names. Without a "broker" key it is kite (the older behaviour)."""
+    return "dhan" if str((cfg or {}).get("broker") or "kite").strip().lower() == "dhan" else "kite"
+
+
+def adapter_module(cfg):
+    if broker_of(cfg) == "dhan":
+        import dhan
+        return dhan
+    import kite
+    return kite
+
+
 def mode_of(cfg):
     return "live" if str((cfg or {}).get("mode") or "paper").lower() == "live" else "paper"
 
@@ -376,7 +389,8 @@ def mode_of(cfg):
 def render(order, idx, total, cfg, risk, state, today):
     mode = mode_of(cfg)
     ready, label, rv = status_of(order, risk, state, today, mode)
-    head = "PAPER: no broker is contacted" if mode == "paper" else "LIVE ACCOUNT, REAL MONEY, Zerodha Kite"
+    head = "PAPER: no broker is contacted" if mode == "paper" else (
+        "LIVE ACCOUNT, REAL MONEY, %s" % ("Dhan" if broker_of(cfg) == "dhan" else "Zerodha Kite"))
     lines = ["ORDER %d of %d, %s" % (idx, total, head)]
     for part in plain_parts(order):
         lines.append("  " + part)
@@ -387,7 +401,7 @@ def render(order, idx, total, cfg, risk, state, today):
         lines.append("  note: " + w)
     if mode == "live":
         call = live_call(order, cfg)
-        lines.append("  Claude will call the Kite %s tool with exactly:" % call["tool"])
+        lines.append("  Claude will call the %s %s tool with exactly:" % (broker_of(cfg).capitalize(), call["tool"]))
         for l in json.dumps(call["arguments"], indent=2).splitlines():
             lines.append("    " + l)
         if order.get("side") == "buy":
@@ -405,8 +419,7 @@ def render(order, idx, total, cfg, risk, state, today):
 
 def live_call(order, cfg):
     """The exact Kite call for this order, built by the adapter from the order's own fields."""
-    import kite
-    return kite.build_call(order, cfg)
+    return adapter_module(cfg).build_call(order, cfg)
 
 
 def ticket_json(order, idx, cfg, risk, state, today):
@@ -493,8 +506,8 @@ def cmd_approve(a):
     if (a.why or "").strip():
         rec["why"] = a.why.strip()
     if mode == "live":
-        import kite
-        rec["payload_hash"] = kite.payload_hash(kite.build_call(order, cfg))
+        mod = adapter_module(cfg)
+        rec["payload_hash"] = mod.payload_hash(mod.build_call(order, cfg))
     state.setdefault("orders", []).append(rec)
     dbp = db.default_path(a.state)
     if db.exists(dbp):
@@ -505,10 +518,12 @@ def cmd_approve(a):
         print("Paper mode: no broker is contacted. Record the paper trade: python3 trader-broker/paper.py open "
               "--index %d" % a.index)
     else:
-        print("Now run kite.py prepare --index %d --open-orders <the saved get_orders result>: it checks every gate "
-              "and prints the one Kite call to make." % a.index)
-        print("Claude's card then shows Allow once / Deny. Afterwards: kite.py record --index %d --order-id ID "
-              "(or --failed / --denied)." % a.index)
+        bro = broker_of(cfg)
+        print("Now run %s.py prepare --index %d --open-orders <the saved get_orders result> --ltp <the saved last-price "
+              "result> --margins <the saved funds result>: it checks every gate and prints the one %s call to make."
+              % (bro, a.index, bro.capitalize()))
+        print("Claude's card then shows Allow once / Deny. Afterwards: %s.py record --index %d --order-id ID "
+              "(or --failed / --denied)." % (bro, a.index))
     return 0
 
 
@@ -531,8 +546,8 @@ def cmd_result(a):
     orders, cfg, risk, state, today, now = _load(a)
     if mode_of(cfg) != "live":
         raise TicketError("result is for live orders only; paper trades are recorded by paper.py")
-    raise TicketError("live results are recorded with kite.py record (it also updates the live ledger and uses "
-                      "the yes up): kite.py record --index %d --order-id ID" % a.index)
+    raise TicketError("live results are recorded with %s.py record (it also updates the live ledger and uses "
+                      "the yes up): %s.py record --index %d --order-id ID" % (broker_of(cfg), broker_of(cfg), a.index))
 
 
 def cmd_flatten(a):

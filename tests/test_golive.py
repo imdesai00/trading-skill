@@ -141,12 +141,25 @@ class TheReportIsHonest(unittest.TestCase):
 
 class Steps(unittest.TestCase):
     def test_the_steps_you_asked_for(self):
-        text = "\n".join(golive.steps_lines())
+        text = "\n".join(golive.steps_lines(broker="kite"))
         for want in ("Connect Kite", "Needs approval", "place_order", "cancel_order", "mode\": \"live\"",
                      "kite_enabled\": true", "max_loss_per_trade_inr\": 250", "first 2 weeks", "Mode = live",
                      "Never paste them into a chat", "Re-verify", "mcp.kite.trade"):
             self.assertIn(want, text)
         self.assertEqual(len(golive.RECHECK), 12)
+
+    def test_the_dhan_steps_are_the_default_and_never_switch_anything(self):
+        text = "\n".join(golive.steps_lines())
+        for want in ("Connect Dhan", "Needs approval", "mcp.dhan.co", "dhan.py securities", "--static-ip-confirmed",
+                     "\"broker\": \"dhan\"", "\"dhan_enabled\": true", "ONE super order", "max_loss_per_trade_inr\": 250",
+                     "Never paste a token", "dhan_tools", "Not financial advice"):
+            self.assertIn(want, text, want)
+        self.assertNotIn("kite_enabled", text)
+        self.assertEqual(len(golive.RECHECK_DHAN), 11)
+        with open(os.path.join(ROOT, "VERIFY.md"), encoding="utf-8") as fh:
+            v = fh.read().lower()
+        self.assertIn("recheck-at-dhan", v)
+        self.assertIn("## 15. dhan", v)
 
     def test_recheck_list_matches_verify_md(self):
         with open(os.path.join(ROOT, "VERIFY.md"), encoding="utf-8") as fh:

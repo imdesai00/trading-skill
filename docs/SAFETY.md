@@ -8,10 +8,10 @@ worst moment, so read it once.
 | | paper (the default) | live |
 | --- | --- | --- |
 | broker contacted | never | Zerodha Kite, through the Kite MCP server |
-| needs | nothing | you set `"mode": "live"` and `"kite_enabled": true` yourself, Kite connected and checked today |
-| record | the database, and the Notion Paper Account | the database, and the Notion Live Account read from Kite |
+| needs | nothing | you set `"mode": "live"`, `"broker": "dhan"` and `"dhan_enabled": true` yourself, Dhan connected and checked today |
+| record | the database, and the Notion Paper Account | the database, and the Notion Live Account read from the broker |
 
-If `mode` is live but Kite is not verified today, every order is refused and the tool says why. No tool ever changes `mode` or `kite_enabled`.
+If `mode` is live but the broker is not verified today, every order is refused and the tool says why. No tool ever changes `mode`, `broker`, `dhan_enabled` or `kite_enabled`.
 
 ## The gates on every order (both modes)
 
@@ -19,8 +19,8 @@ If `mode` is live but Kite is not verified today, every order is refused and the
    no longer counts.
 2. **Your typed "yes" for that one order.** "sure", "ok", "go ahead" and "yes to all" are not a yes; Claude asks again. One yes covers one order, once. Your words are stored
    unchanged in the database.
-3. **Live only: Claude's own "Allow once" card**, with every Kite tool that places, modifies, cancels or exits orders set to "Needs approval". The pack cannot see that setting, so
-   `kite.py check` refuses to verify until you confirm it yourself.
+3. **Live only: Claude's own "Allow once" card**, with every broker tool that places, modifies, cancels or exits orders (Dhan: including super orders and forever orders) set to "Needs approval". The pack cannot see that setting, so
+   `dhan.py check` (or `kite.py check`) refuses to verify until you confirm it yourself, and `dhan.py check` also asks you to confirm the static-IP point.
 4. **Nothing from a background or scheduled task.** There is no scheduler in the pack. If you schedule a task yourself, it cannot place orders: there is nobody to say yes.
 
 ## What the risk check enforces
@@ -58,11 +58,11 @@ Exits are never blocked by the day limits, the window, or the kill switch. Getti
 
 ## Live mode's extra protections
 
-- Entries use **Kite's live price**, not Yahoo's. If it is more than 0.3% from the planned entry, nothing is placed, the yes is used up and you must run the risk check and say yes again.
+- Entries use **the broker's live price**, not Yahoo's. If it is more than 0.3% from the planned entry, nothing is placed, the yes is used up and you must run the risk check and say yes again.
 - The available cash must cover the whole order.
-- The stop is a **separate order** (SL-M) placed after the entry fills, with its own risk check, yes and card. `kite.py sync` warns loudly if a position has no stop.
+- With Dhan the entry is one **super order** that carries its own stop-loss and target legs (one risk check, one yes, one card); `dhan.py sync` warns if the order is rejected or cancelled. With Zerodha the stop is a separate SL-M order after the fill, and `kite.py sync` warns if a position has no stop.
 - **No automatic retries.** After a failure the yes is used up. Before any retry, the order book is read so one yes can never create two orders.
-- **Live reconcile** compares Kite's trades and positions with the record. Kite wins. Differences go into a Discrepancies table and are shown to you, never fixed silently.
+- **Live reconcile** compares the broker's trades and positions with the record. The broker wins. Differences go into a Discrepancies table and are shown to you, never fixed silently.
 
 ## Your own part
 

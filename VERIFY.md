@@ -286,6 +286,26 @@ Searched on 2026-10-29. The sandbox could not open any of these sites, so none w
 | Contract-note charges | Entered by hand: `kite.py set-charges`. No contract-note parser is built. | Not built. |
 | Cover orders and GTT for MIS | Still unverified (section 2). The live design is entry, a resting SL-M stop after the fill, and a new order for the target or flat-by. A target is not a resting order. | Different from "CO or GTT OCO" in your spec; see docs/AUDIT.md. |
 
+## 15. Dhan (chosen as the broker instead of Zerodha, 2026-11-16)
+
+Found by web search and by reading three GitHub pages. The sandbox could not open `dhan.co`, `dhanhq.co`, `docs.dhanhq.co` or `medium.com`, so **nothing was read from Dhan's own pages**. Status words as in the legend at the top. Marked RECHECK-AT-DHAN where you must check before `broker: dhan` goes live. The full analysis is [docs/DHAN.md](docs/DHAN.md).
+
+| item | finding | status |
+| --- | --- | --- |
+| Official MCP server | Dhan's blog and docs describe a first-party MCP server (holdings, positions, funds, quotes, depth, option chains, margin, and placing, modifying and cancelling orders including super orders). A walkthrough gives `https://mcp.dhan.co/mcp` and says every session asks for explicit consent. Sources: dhan.co/blog/trading-strategies/why-trade-intraday-with-claude-try-dhan-mcp-skills, docs.dhanhq.co/mcp/tools/orders | SECONDARY (search snippets). RECHECK-AT-DHAN |
+| Official MCP tool names | Not found; the docs page `mcp/tools/orders` exists but could not be opened. Community servers use `place_order`, `place_slice_order`, `get_orders`, `get_fund_limits`, `get_positions`, `get_market_ltp`, but they are not Dhan's. The adapter's defaults are guesses and are overridden by `dhan_tools` in the config | **UNVERIFIED / RECHECK-AT-DHAN** |
+| Order APIs need a static IP | DhanHQ release notes: static IP required for all order APIs (normal, super, forever); data calls said to work without. Error `DH-911` for an invalid IP. Whether the hosted MCP route changes this is unknown | SECONDARY. RECHECK-AT-DHAN |
+| Order rate limit | 10 orders per second (support page); a third-party review also lists 250 a minute and 7,000 a day, not confirmed | SECONDARY |
+| Access token | valid 24 hours, renewable; API key valid 12 months with a daily login (authentication docs) | SECONDARY |
+| Instruments | orders use a numeric `securityId` and `exchangeSegment`; `NSE_EQ` for NSE equity (not confirmed from the REST page; the SDK page shows `NSE`). Source file `images.dhan.co/api-data/api-scrip-master.csv`. Duplicate symbols exist (a bond named IRFC-EQ). `dhan.py securities` assumes columns containing `security`+`id`, `trading`+`symbol`, `exch`, `series`, `segment`, `instrument` and drops ambiguous symbols | SECONDARY for the file, **UNVERIFIED for column names and `NSE_EQ`** |
+| Product and order types | product `INTRADAY` (also CNC, MARGIN, MTF); order types LIMIT, MARKET, STOP_LOSS, STOP_LOSS_MARKET; `STOP_LOSS` needs price and trigger price; API market orders are converted to limit orders with market price protection | SECONDARY (dhanhq-skills orders.md) |
+| Super order | one request with entry, target and stop-loss legs and an optional trailing stop; fields `targetPrice`, `stopLossPrice`, `trailingJump`; legs `ENTRY_LEG`, `TARGET_LEG`, `STOP_LOSS_LEG`; entry modifiable only while PENDING or PART_TRADED; untriggered intraday orders are cancelled automatically; a GitHub issue reports validation quirks (market super orders, partial leg sets). Whether cancelling `ENTRY_LEG` cancels the other legs once the entry has traded is not stated | SECONDARY. RECHECK-AT-DHAN |
+| Order and trade fields | order list: `orderId`, `correlationId`, `orderStatus`, `transactionType`, `exchangeSegment`, `productType`, `remainingQuantity`, `averageTradedPrice`, `filledQty`; statuses TRANSIT, PENDING, REJECTED, CANCELLED, TRADED, EXPIRED; one forum thread names the trade-book average `avgTradePrice`; placement reply `{"status": "success", "data": {"orderId", "orderStatus"}}`; the funds field is spelled `availabelBalance` in Dhan's API (to be confirmed). `tradingSymbol`, `netQty`, `tradedQuantity`, `tradedPrice` for trades and positions are from memory. The readers accept several spellings | SECONDARY, partly conflicting. **UNVERIFIED for the rest. RECHECK-AT-DHAN** |
+| Auto square-off | Dhan FAQ: 3:10 PM for equity intraday (before the closing auction); another Dhan page: from 3:18 PM; a third-party page: 3:20 PM. Auto square-off charge ₹20 per order + GST | SECONDARY, conflicting. `flat_by` 15:00 is earlier than all three |
+| Charges | intraday brokerage ₹20 or 0.03% per order, whichever is lower; NSE exchange charge 0.00297% on the pricing page (matches `exchange_pct`); STT, SEBI fee and stamp duty are statutory | SECONDARY (dhan.co/pricing snippet). RECHECK-AT-DHAN |
+| MIS list and leverage | Dhan margin and MIS eligibility rules were not read. The pack never uses leverage | UNVERIFIED |
+| Sizing of one live trade | one super order = one ticket, one risk check, one typed yes, one Allow once card; leaving early is cancel then sell, each with its own yes | Design (docs/DHAN.md) |
+
 ## Items to re-check when you connect Kite (RECHECK-AT-KITE)
 
 1. Whether the hosted `mcp.kite.trade` exposes `place_order` / `modify_order` / `cancel_order` (assumed: no).
@@ -304,3 +324,17 @@ Searched on 2026-10-29. The sandbox could not open any of these sites, so none w
     the cash check, `kite.py check` and `kite.py reconcile` read them.
 13. Whether the Kite MCP server you use returns order, trade and position fields with the names the adapter reads
     (`order_id`, `status`, `average_price`, `filled_quantity`, `tradingsymbol`, `transaction_type`, `quantity`).
+
+## Items to re-check when you connect Dhan (RECHECK-AT-DHAN)
+
+1. The real tool list of Dhan's MCP connector and which tools place, modify, cancel or exit orders, including super orders and forever orders; then put the real names in `dhan_tools` in your config.
+2. Whether Dhan's order APIs need a registered static IP on your route, and that it is registered.
+3. How long the login lasts and how you connect each morning.
+4. That a super order (entry, stop-loss and target) works for NSE equity INTRADAY, and what cancelling it does to its legs once the entry has traded.
+5. That a LIMIT super-order entry fills as documented (API market orders become limit orders with protection).
+6. The numeric `securityId` for each symbol you trade, from Dhan's instrument list, and the real column names of that file.
+7. The real field names in the order, trade, position, funds and last-price results (the readers accept several spellings; confirm which one is real).
+8. Dhan's intraday auto square-off time against your `flat_by`.
+9. Every rate in the charges table against dhan.co/pricing on the day.
+10. Tick size per symbol against the NSE band table.
+11. Whether Yahoo's `.NS` quotes match Dhan's prices closely enough to size trades on.

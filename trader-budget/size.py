@@ -56,7 +56,10 @@ import guards  # noqa: E402  (shared guard rules; trader-risk, -scanner and -con
 # Your limits (the request of 2026-10-29). trader/config.json overrides them; the tools never write them.
 DEFAULTS = {
     "mode": "paper",
+    "broker": "dhan",
+    "dhan_enabled": False,
     "kite_enabled": False,
+    "dhan_tools": {},
     "capital_inr": 100000,
     "max_loss_per_trade_inr": 500,
     "max_daily_loss_inr": 1500,

@@ -16,7 +16,7 @@ The usual order for one trade: scanner, news, entry, exit, timemachine, budget, 
 | trader-timemachine | `/trader-timemachine` | Replays the rest of the session 10,000 times from the stock's own recent bars and re-runs the rule on past days. A reality check, not a prediction. | `timemachine.py run --write` |
 | trader-budget | `/trader-budget` | Sizes the trade in whole shares so the loss at the stop, with charges and slippage, fits your limit. Says which limit decided it. Refuses weak trades. Also creates your config and database (`init`). | `size.py init`, `size.py --write` |
 | trader-risk | `/trader-risk` | PASS or BLOCK on the exact order against every limit and protection, with plain reasons. | `check.py` |
-| trader-broker | `/trader-broker` | Shows the ticket, records your typed yes, books the paper trade (paper mode) or prepares the exact Kite orders (live mode, off by default). | `ticket.py show/approve/decline/flatten`, `paper.py open/skip/reconcile/feel/status`, `kite.py ...` |
+| trader-broker | `/trader-broker` | Shows the ticket, records your typed yes, books the paper trade (paper mode) or prepares the exact Dhan orders (live mode, off by default; a Zerodha adapter also exists). | `ticket.py show/approve/decline/flatten`, `paper.py open/skip/reconcile/feel/status`, `dhan.py ...` (or `kite.py ...`) |
 | trader-alerts | `/trader-alerts` | The NSE clock, quotes, and alerts for stop, target, flat-by and the opening bell. | `alerts.py clock/quote/add/check` |
 
 ## The record, the controls and the review
@@ -44,7 +44,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the files and tables. In short: the p
 ## Rules that apply to every skill
 
 - Not financial advice. A PASS is a rules check, not a recommendation.
-- Paper trading is the default. Real orders need `"mode": "live"` and `"kite_enabled": true` set by you, a Kite check from today, a risk PASS on the exact order,
+- Paper trading is the default. Real orders need `"mode": "live"`, `"broker": "dhan"` and `"dhan_enabled": true` set by you, a Dhan check from today, a risk PASS on the exact order,
   your typed yes for that one order, and Claude's own Allow once card.
 - NSE cash equity, intraday (MIS), longs only. No F&O, no margin, no short selling.
-- Kite keys and tokens live in environment variables or config you edit yourself, never in the chat.
+- Broker keys and tokens live in environment variables or config you edit yourself, never in the chat.

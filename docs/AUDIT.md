@@ -1,5 +1,7 @@
 # Audit: the build against your full specification
 
+> **Update 2026-11-16:** the live broker is now Dhan, not Zerodha. Every "Kite" row below describes the Zerodha adapter, which is kept as an alternative; the Dhan adapter, its differences and what is unverified about Dhan are in [DHAN.md](DHAN.md). The gaps listed under "What we will miss" still apply, with one change: a Dhan super order gives a resting target and a stop that exists from the first fill, which the Zerodha design could not.
+
 Date of this audit: 2026-10-29. What was checked: every section of the specification you gave, against the code in this
 repository (15 skill folders, about 20,000 lines of Python, 495 passing tests). "Done" means built and covered by an offline
 test. Almost nothing here has touched real NSE, Yahoo, Moneycontrol, Zerodha or Notion: the sandbox it was built in could not

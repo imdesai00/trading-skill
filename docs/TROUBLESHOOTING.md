@@ -18,7 +18,10 @@ Find the message (or what you saw) in the first column.
 | `before the yes, ask the user: "Why are you taking this trade?"` | an entry needs your reason | pass it with `--why "..."` |
 | `Not recorded: ...` from `ticket.py approve` | your reply was not a plain yes for that order | reply `yes` (or `yes 45 SYMBOL`), not "ok" |
 | `order N is not ready: ...` | no risk PASS on this exact order today, or already decided | run `check.py` again; if you changed anything, you need a new check and a new yes |
-| `kite.py: OFF. ...` (exit code 2) | live mode is not fully switched on | by design. See [GO_LIVE.md](GO_LIVE.md). No Kite call was made |
+| `dhan.py: OFF. ...` or `kite.py: OFF. ...` (exit code 2) | live mode is not fully switched on (mode, broker, the enabled switch, or no check today) | by design. See [GO_LIVE.md](GO_LIVE.md). No broker call was made |
+| `dhan.py: not verified ... static IP` / `... Needs approval` | you have not confirmed the two things only you can check | confirm, then pass `--static-ip-confirmed` and `--tools-need-approval` |
+| `... no securityId` / `no symbol-to-securityId map` | Dhan uses numbers, not symbols | `dhan.py securities --csv api-scrip-master.csv` |
+| `a Dhan entry must be a limit order` | API market orders become limit orders | `size.py --limit` |
 | `kite.py: not verified. Every Kite tool ...` | you have not confirmed "Needs approval" | set the tools in Claude, then pass `--tools-need-approval` |
 | `Kite's last price ... from the planned entry` | the live price moved more than 0.3% | the yes is used up. Run `check.py` again with Kite's price and say yes again |
 | `no live price` / `no margin figures` | an entry needs `--ltp` and `--margins` | call `get_ltp` and `get_margins`, save the results, pass them |

@@ -321,8 +321,22 @@ def ledger_view(ledger, today, capital):
             "open_risk": round(open_risk, 2), "week_from": week0}
 
 
+def broker_of(c):
+    return "dhan" if str(c.get("broker") or "kite").strip().lower() == "dhan" else "kite"
+
+
 def kite_ready(c, kite_state, today):
-    """(ok, why): live mode needs kite_enabled and a Kite connection check from today."""
+    """(ok, why): live mode needs the broker's switch (kite_enabled, or broker dhan with dhan_enabled) and a
+    connection check from today."""
+    bro = broker_of(c)
+    if bro == "dhan":
+        if not c.get("dhan_enabled"):
+            return False, ("\"mode\" is \"live\" and \"broker\" is \"dhan\" but \"dhan_enabled\" is not true: live orders "
+                           "stay off until you set it yourself and connect Dhan (docs/DHAN.md)")
+        ks = kite_state or {}
+        if not ks.get("verified") or str(ks.get("date")) != today:
+            return False, ("Dhan is not verified today: run trader-broker's dhan.py check after you connect Dhan today")
+        return True, ""
     if not c.get("kite_enabled"):
         return False, ("\"mode\" is \"live\" but \"kite_enabled\" is not true: live orders stay off until you set "
                        "both yourself and connect Kite (trader-broker SKILL.md)")
@@ -705,7 +719,8 @@ def main(argv=None):
     ap.add_argument("--ledger", help="account ledger (default trader/state/<mode>.json)")
     ap.add_argument("--db", help="default: trader/trader.db (next to the state folder)")
     ap.add_argument("--prices", default="trader/prices.json")
-    ap.add_argument("--kite-state", default="trader/state/kite.json", help="the Kite connection check (live mode)")
+    ap.add_argument("--kite-state", default=None,
+                    help="the broker connection check (live mode); default trader/state/<broker>.json")
     ap.add_argument("--now", help="pretend it is this India time, e.g. \"2026-10-30 09:51\"")
     ap.add_argument("--today", help="YYYY-MM-DD (default: today in India)")
     ap.add_argument("--out", default="trader/state/risk.json", help="where the verdicts are recorded")
@@ -735,7 +750,9 @@ def main(argv=None):
         control = db.control_blocks(a.config, mode, a.today or to_ist(now).date().isoformat(), dbp)
         pdoc = read_json(a.prices, "prices", required=False) or {}
         prices, times = load_prices(pdoc)
-        kite_state = read_json(a.kite_state, "kite state", required=False)
+        state_dir_ = os.path.join(os.path.dirname(os.path.abspath(a.config)), "state")
+        kite_state = read_json(a.kite_state or os.path.join(state_dir_, "%s.json" % broker_of(cfg)),
+                               "broker state", required=False)
         prev = {str(s_).upper(): (d_ or {}).get("prev_close")
                 for s_, d_ in (pdoc.get("detail") or {}).items() if isinstance(d_, dict)}
         res = check(orders, cfg, ledger, prices, kite_state, a.today, now, times, prot, control, prev)

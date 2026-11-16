@@ -18,14 +18,15 @@ Start here if you are new. Read the files in this order the first time; later, u
 | [GLOSSARY.md](GLOSSARY.md) | a word is new to you (MIS, SL-M, ASM, R multiple ...) |
 | [ROADMAP.md](ROADMAP.md) | you want to know the three phases and the exit test for each |
 | [PHASE_2_UI.md](PHASE_2_UI.md) | planning the local dashboard (after real-data paper trading works) |
-| [PHASE_3_ZERODHA.md](PHASE_3_ZERODHA.md) | planning the Zerodha connection (last, and only after the paper period) |
+| [DHAN.md](DHAN.md) | the broker is Dhan: what it offers, what is verified, how the pack uses it |
+| [PHASE_3_DHAN.md](PHASE_3_DHAN.md) | planning the Dhan connection (last, and only after the paper period) |
 | [AUDIT.md](AUDIT.md) | you want to see this build checked against the specification, and what is still missing |
 
 Two facts to keep in mind everywhere:
 
 1. **Nothing here is financial advice**, and most people who day trade lose money.
 2. **Paper trading is the default and nothing places an order without your typed "yes".** Real money needs you to edit your own config
-   file, connect Zerodha Kite yourself and confirm several settings. No tool in this pack can do that for you.
+   file, connect Dhan yourself and confirm several settings. No tool in this pack can do that for you.
 
 Also in the repository: [VERIFY.md](../VERIFY.md) lists every outside fact the code depends on, with its source, its date and whether it was
 actually checked. Read it before you trust a feed or a charge rate.

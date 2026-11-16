@@ -6,11 +6,11 @@ Three phases. Each starts only when the one before it has passed its exit test. 
 | --- | --- | --- | --- |
 | 1 | Paper trading on real data | **Built, not yet proven on real data** | this page, below |
 | 2 | Local dashboard (read-only, plus a planner) | Planned | [PHASE_2_UI.md](PHASE_2_UI.md) |
-| 3 | Zerodha Kite connection | Planned; the safety code exists, the connection does not | [PHASE_3_ZERODHA.md](PHASE_3_ZERODHA.md) |
+| 3 | Dhan connection | Adapter built and tested against a fake Dhan; the real connection is planned | [PHASE_3_DHAN.md](PHASE_3_DHAN.md), [DHAN.md](DHAN.md) |
 
 ## Phase 1: paper trading on real data (now)
 
-What exists: the whole pipeline, the paper broker, the database, the Notion journal, the controls, the protections, the Kite safety layer (off), and the docs. All of it was tested offline on synthetic data. Nothing has run against real NSE, Yahoo, Moneycontrol, Zerodha or Notion.
+What exists: the whole pipeline, the paper broker, the database, the Notion journal, the controls, the protections, the live-order safety layer and the Dhan adapter (off), and the docs. All of it was tested offline on synthetic data. Nothing has run against real NSE, Yahoo, Moneycontrol, Zerodha or Notion.
 
 What Phase 1 is for: finding out what breaks on real data, and learning the routine ([HOW_TO_USE.md](HOW_TO_USE.md)).
 
@@ -37,12 +37,12 @@ If the paper result is poor or sits inside the noise, the right move is more pap
 ## Why this order
 
 - A dashboard on feeds that do not work shows empty boxes. A dashboard on proven feeds shows what you actually need.
-- Real money needs the rules to have survived real data. The Kite layer is built but off, and stays off until Phase 3's own checklist is done.
+- Real money needs the rules to have survived real data. The Dhan adapter is built but off, and stays off until Phase 3's own checklist is done.
 - Each phase adds a way to lose money or to fool yourself (a clickable UI invites impulse; a live account has consequences). Neither is added before the one under it is solid.
 
 ## Rules that do not change in any phase
 
-- Paper is the default. `mode` and `kite_enabled` are set only by you, by hand.
+- Paper is the default. `mode`, `broker`, `dhan_enabled` and `kite_enabled` are set only by you, by hand.
 - Every order needs a risk PASS on that exact order and your typed yes for that one order. In live mode it also needs Claude's own Allow once card.
 - No secrets in the repository, the database or Notion. Standard-library Python 3.8+ only. No order from a scheduled or background task.
 - No test is deleted or weakened to make something pass. Every outside fact goes in VERIFY.md with a source and a date.

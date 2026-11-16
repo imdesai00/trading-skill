@@ -69,14 +69,14 @@ to get them and how to load them. Do this on day one: it is the part most people
 ## 8. Your first paper day
 
 Follow [DAILY_ROUTINE.md](DAILY_ROUTINE.md). On the first day, expect most setups to be refused by the budget manager or the risk manager. That is
-the pack working: with ₹500 of risk and Zerodha's charges, many trades are not worth taking.
+the pack working: with ₹500 of risk and the broker's charges, many trades are not worth taking.
 
 ## 9. Security reminders (read these now, not later)
 
-- Turn on **Zerodha's TOTP two-factor login** before you ever connect an API.
-- **Never share your Kite API key, secret, password, TOTP code or access token** with anyone, **including Claude**. If a tool or a chat asks for one,
+- Turn on **two-factor login (TOTP) at your broker** before you ever connect an API.
+- **Never share a broker API key, secret, password, TOTP code or access token** with anyone, **including Claude**. If a tool or a chat asks for one,
   stop.
-- Kite credentials, if you ever use them, live in environment variables or in a config file you edit yourself, outside this folder. This pack never
+- Broker credentials, if you ever use them, live in environment variables or in a config file you edit yourself, outside this folder. This pack never
   asks for them and never stores them.
 
 ## What "done" looks like for week one

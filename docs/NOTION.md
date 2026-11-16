@@ -24,7 +24,7 @@ you connected in Claude, and marks it sent. You are never asked for a Notion tok
 | **Weekly Reports** | one page per week and mode, in plain language |
 | **Capital Changes** | every deposit, withdrawal or capital change with the reason |
 | **Pauses** | pauses, resumes and kill switches |
-| **Discrepancies** | live mode: anything where Kite and the record disagree |
+| **Discrepancies** | live mode: anything where the broker and the record disagree |
 
 The Notion database ids are saved in `trader/config.json` (`notion` section). They are not secrets.
 
