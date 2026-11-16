@@ -174,6 +174,16 @@ The full steps come with the Kite adapter. The outline, from VERIFY.md:
 - Never switches `"mode"` or `"kite_enabled"`. You do that yourself.
 - Never promises a fill price: a market order and a stop fill at whatever the market gives.
 
+## FYERS (added 2026-11-16)
+
+`fyers.py` is the live adapter for FYERS; it builds on `kite.py`. Read `docs/FYERS.md` first. It uses the same three-order design as Zerodha
+(entry, separate SL-M stop with `fyers.py stop-ticket`, exit = cancel the stop then sell) because FYERS's bracket and cover products are reported
+as deprecated. Live needs `"mode": "live"`, `"broker": "fyers"` and `"fyers_enabled": true`, set by the user, and `fyers.py check` from today (with
+`--tools-need-approval` and `--static-ip-confirmed`, which only the user can confirm). FYERS names stocks `NSE:SBIN-EQ`, so no id map is needed.
+Real tool names go in `fyers_tools`. Nothing is verified against FYERS's pages. **TradingView paper trading is not integrated** (no API found; NSE
+symbols reportedly blocked): the pack's own paper broker is the paper account. Never suggest placing real orders from TradingView's FYERS panel while
+this pack is in use: they skip the risk check, the typed yes and the database.
+
 ## Dhan, the chosen broker (added 2026-11-16)
 
 `dhan.py` is the live adapter for Dhan; it builds on `kite.py` (same folder) for the gates and the bookkeeping. Read `docs/DHAN.md` first.

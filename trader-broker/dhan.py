@@ -340,16 +340,7 @@ class DhanAdapter(kite.KiteAdapter):
                 else str(first(p, "productType", "product")).upper()}
 
     def exit_reason(self, t, sells, vwap, last_t, stop_id):
-        hint = t.get("exit_reason_hint")
-        if hint in ("target", "flat-by", "manual"):
-            return hint
-        tgt, stop = t.get("target"), t.get("stop")
-        if tgt and stop and vwap >= tgt - 0.005:
-            return "target"
-        if tgt and stop and abs(vwap - stop) <= abs(vwap - tgt) and vwap <= (t.get("entry_fill") or vwap):
-            return "stop"
-        hh = kite._hhmm(last_t)
-        return "flat-by" if hh and hh >= t["flat_by"] else "manual"
+        return kite.price_exit_reason(t, vwap, last_t)
 
     def known_trade(self, x, led, known_orders):
         return str(x.get("order_id")) in known_orders or any(t["symbol"] == x.get("tradingsymbol")
@@ -388,73 +379,15 @@ def cmd_securities(a):
 
 def cmd_check(a):
     """The read-only connection check. No order is possible until this passes today."""
-    cfg = _cfg(a)
-    now = kite.parse_now(a.now)
-    today = kite.to_ist(now).date().isoformat()
-    for k, want, why in (("mode", "live", "\"mode\" must be \"live\""), ("broker", "dhan", "\"broker\" must be \"dhan\""),
-                         ("dhan_enabled", True, "\"dhan_enabled\" must be true")):
-        if (str(cfg.get(k)).lower() if k in ("mode", "broker") else cfg.get(k)) != want:
-            kite.say("dhan.py: %s (set by you, in trader/config.json) before the adapter does anything." % why,
-                     file=sys.stderr)
-            return 1
-    prof = kite.read_json(a.profile, "the saved profile or funds result (save what the tool returned)")
-    if not isinstance(prof, dict) or not prof or "error" in prof:
-        kite.say("dhan.py: that does not look like a Dhan result (empty or an error): connect Dhan again and call "
-                 "the profile tool.", file=sys.stderr)
-        return 1
-    if not a.tools_need_approval:
-        kite.say("dhan.py: not verified. Every Dhan tool that places, modifies, cancels or exits orders (orders, super "
-                 "orders, forever orders) must be set to \"Needs approval\" in Claude (Customize, Connectors, the Dhan "
-                 "connector). A script cannot see that setting: check it yourself, then run this again with "
-                 "--tools-need-approval.", file=sys.stderr)
-        return 1
-    if not a.static_ip_confirmed:
-        kite.say("dhan.py: not verified. Dhan's order APIs are documented as needing a registered static IP. Check on "
-                 "Dhan whether your route needs one and that it is registered, then run this again with "
-                 "--static-ip-confirmed.", file=sys.stderr)
-        return 1
-    ad = DhanAdapter(cfg, None, a.base, now)
-    problems, notes = [], []
-    if a.margins:
-        cash = ad.cash_of(kite._load_saved(a.margins, "the saved funds result"))
-        notes.append("Dhan shows %s available." % (kite.inr(cash, True) if cash is not None else "no readable cash figure"))
-        if cash is None:
-            problems.append("the funds result has no cash figure I can read")
-        elif cash <= 0:
-            problems.append("Dhan shows no available cash")
-    else:
-        problems.append("pass --margins (the funds result): the available cash must be read")
-    if a.positions:
-        pos = kite._load_saved(a.positions, "the saved positions result")
-        raw = (pos.get("net") if isinstance(pos, dict) and "net" in pos else pos) or []
-        open_pos = {}
-        for p in (ad.norm_position(q) for q in raw if isinstance(q, dict)):
-            if p["quantity"]:
-                open_pos[p["tradingsymbol"]] = p["quantity"]
-        _, led = ad.load_live()
-        ours = {t["symbol"]: t["qty"] for t in led["trades"] if t["status"] in ("open", "pending_fill")}
-        for sym, q in open_pos.items():
-            if ours.get(sym) != q:
-                problems.append("Dhan shows %d %s open and this record has %s: unexpected position" % (q, sym, ours.get(sym, 0)))
-        notes.append("%d open position%s at Dhan." % (len(open_pos), "" if len(open_pos) == 1 else "s"))
-    else:
-        problems.append("pass --positions (the positions result): unexpected open positions must be ruled out")
-    try:
-        load_ids(cfg)
-    except DhanError as e:
-        problems.append(str(e))
-    if problems:
-        kite.say("dhan.py: NOT verified:", file=sys.stderr)
-        for pr in problems:
-            kite.say("  - " + pr, file=sys.stderr)
-        return 1
-    kite.write_json(a.out, {"verified": True, "date": today, "broker": "dhan",
-                            "checked_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            "order_tools_need_approval_confirmed_by_user": True, "static_ip_confirmed_by_user": True,
-                            "note": "no account details are stored"})
-    kite.say("Dhan verified for %s. %s" % (today, " ".join(notes)))
-    kite.say("Dhan's login lasts one day: connect again tomorrow before you trade.")
-    return 0
+    def ids_problem(cfg):
+        try:
+            load_ids(cfg)
+        except DhanError as e:
+            return [str(e)]
+        return []
+    return kite.live_check(a, "dhan", "Dhan", DhanAdapter, ids_problem, [
+        ("static_ip_confirmed", "Dhan's order APIs are documented as needing a registered static IP. Check on Dhan whether "
+                                "your route needs one and that it is registered, then run this again with --static-ip-confirmed.")])
 
 
 def cmd_prices(a):
@@ -509,7 +442,7 @@ def main(argv=None):
     p.add_argument("--positions")
     p.add_argument("--tools-need-approval", action="store_true",
                    help="you confirm every Dhan order tool is set to Needs approval in Claude")
-    p.add_argument("--static-ip-confirmed", action="store_true",
+    p.add_argument("--static-ip-confirmed", dest="static_ip_confirmed", action="store_true",
                    help="you confirm Dhan's static-IP requirement is met for your route")
     p.add_argument("--out", default="trader/state/dhan.json")
     p = sub.add_parser("prepare")

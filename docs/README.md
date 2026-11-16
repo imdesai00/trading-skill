@@ -19,6 +19,7 @@ Start here if you are new. Read the files in this order the first time; later, u
 | [ROADMAP.md](ROADMAP.md) | you want to know the three phases and the exit test for each |
 | [PHASE_2_UI.md](PHASE_2_UI.md) | planning the local dashboard (after real-data paper trading works) |
 | [DHAN.md](DHAN.md) | the broker is Dhan: what it offers, what is verified, how the pack uses it |
+| [FYERS.md](FYERS.md) | FYERS as an alternative broker, and why TradingView paper trading is not integrated |
 | [PHASE_3_DHAN.md](PHASE_3_DHAN.md) | planning the Dhan connection (last, and only after the paper period) |
 | [AUDIT.md](AUDIT.md) | you want to see this build checked against the specification, and what is still missing |
 

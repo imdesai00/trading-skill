@@ -306,6 +306,23 @@ Found by web search and by reading three GitHub pages. The sandbox could not ope
 | MIS list and leverage | Dhan margin and MIS eligibility rules were not read. The pack never uses leverage | UNVERIFIED |
 | Sizing of one live trade | one super order = one ticket, one risk check, one typed yes, one Allow once card; leaving early is cancel then sell, each with its own yes | Design (docs/DHAN.md) |
 
+## 16. FYERS and TradingView (analysed 2026-11-16, at your request)
+
+Found by web search and one GitHub page; `fyers.in` and `tradingview.com` could not be opened. The full analysis is [docs/FYERS.md](docs/FYERS.md). Marked RECHECK-AT-FYERS where you must check before `broker: fyers` goes live.
+
+| item | finding | status |
+| --- | --- | --- |
+| Official MCP server | docs list `mcp.fyers.in/mcp` with place, modify, cancel, basket and scheduled orders (fyers.in/api-docs/ai/mcp); an older community post says order tools were not available | SECONDARY, conflicting. RECHECK-AT-FYERS |
+| Tool names and result fields | not found; `fyers_tools` takes the real names | **UNVERIFIED. RECHECK-AT-FYERS** |
+| Symbols | `NSE:SBIN-EQ` | SECONDARY |
+| BO and CO | the FYERS Go SDK README: deprecated and rejected by the API; community reports mixed. Not used | SECONDARY, conflicting |
+| Attached TP/SL | optional `takeProfit`, `stopLoss`, `legType` on INTRADAY orders (points or percent). Not used | SECONDARY, unverified |
+| Order types and sides | type 1 limit, 2 market, 3 SL-M, 4 SL-L; side 1 buy, -1 sell | SECONDARY |
+| Order book fields and statuses | 1 cancelled and 2 traded confirmed on the GTT page; 4 transit, 5 rejected, 6 pending, `tradedPrice`, `filledQty`, `netQty`, `fund_limit`, `equityAmount`, `lp` from memory | UNVERIFIED. RECHECK-AT-FYERS |
+| Static IP, rate limits, login, charges | not read | UNVERIFIED |
+| TradingView with FYERS | FYERS is a TradingView broker partner; you can trade real orders from TradingView's panel | SECONDARY |
+| TradingView paper trading | exists; a community post says NSE symbols are blocked there; no API found to place or read paper orders; no export format found | SECONDARY / UNVERIFIED. **Not integrated** |
+
 ## Items to re-check when you connect Kite (RECHECK-AT-KITE)
 
 1. Whether the hosted `mcp.kite.trade` exposes `place_order` / `modify_order` / `cancel_order` (assumed: no).
@@ -338,3 +355,16 @@ Found by web search and by reading three GitHub pages. The sandbox could not ope
 9. Every rate in the charges table against dhan.co/pricing on the day.
 10. Tick size per symbol against the NSE band table.
 11. Whether Yahoo's `.NS` quotes match Dhan's prices closely enough to size trades on.
+
+## Items to re-check when you connect FYERS (RECHECK-AT-FYERS)
+
+1. Whether FYERS's official MCP server places orders for your account today, and its real tool list; then fill `fyers_tools`.
+2. Whether order APIs need a registered static IP on your route.
+3. How long the login lasts and how you connect each morning.
+4. That a plain INTRADAY market order and an SL-M stop order (type 3 with `stopPrice`) are accepted for NSE equity; else set `"stop_order_type": "SL"`.
+5. The real field names and status codes in the orders, trades, positions, funds and quotes results.
+6. That the returned order tag carries your `orderTag` (the duplicate guard reads it, ignoring a leading `N:`).
+7. FYERS's intraday auto square-off time against your `flat_by`.
+8. Every rate in the charges table against FYERS's pricing page.
+9. Tick size per symbol against the NSE band table.
+10. Whether Yahoo's `.NS` quotes match FYERS's prices closely enough to size trades on.

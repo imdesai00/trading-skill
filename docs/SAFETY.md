@@ -11,7 +11,7 @@ worst moment, so read it once.
 | needs | nothing | you set `"mode": "live"`, `"broker": "dhan"` and `"dhan_enabled": true` yourself, Dhan connected and checked today |
 | record | the database, and the Notion Paper Account | the database, and the Notion Live Account read from the broker |
 
-If `mode` is live but the broker is not verified today, every order is refused and the tool says why. No tool ever changes `mode`, `broker`, `dhan_enabled` or `kite_enabled`.
+If `mode` is live but the broker is not verified today, every order is refused and the tool says why. No tool ever changes `mode`, `broker`, `dhan_enabled`, `fyers_enabled` or `kite_enabled`.
 
 ## The gates on every order (both modes)
 

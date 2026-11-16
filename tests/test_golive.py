@@ -161,6 +161,14 @@ class Steps(unittest.TestCase):
         self.assertIn("recheck-at-dhan", v)
         self.assertIn("## 15. dhan", v)
 
+    def test_the_fyers_steps(self):
+        text = "\n".join(golive.steps_lines(broker="fyers"))
+        for want in ("Connect FYERS", "mcp.fyers.in", "\"broker\": \"fyers\"", "\"fyers_enabled\": true", "stop-ticket",
+                     "TradingView", "Needs approval", "fyers_tools", "Never paste a token"):
+            self.assertIn(want, text, want)
+        self.assertNotIn("kite_enabled", text)
+        self.assertEqual(len(golive.RECHECK_FYERS), 10)
+
     def test_recheck_list_matches_verify_md(self):
         with open(os.path.join(ROOT, "VERIFY.md"), encoding="utf-8") as fh:
             v = fh.read()

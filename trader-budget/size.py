@@ -60,6 +60,8 @@ DEFAULTS = {
     "dhan_enabled": False,
     "kite_enabled": False,
     "dhan_tools": {},
+    "fyers_enabled": False,
+    "fyers_tools": {},
     "capital_inr": 100000,
     "max_loss_per_trade_inr": 500,
     "max_daily_loss_inr": 1500,

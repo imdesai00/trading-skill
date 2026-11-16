@@ -322,20 +322,22 @@ def ledger_view(ledger, today, capital):
 
 
 def broker_of(c):
-    return "dhan" if str(c.get("broker") or "kite").strip().lower() == "dhan" else "kite"
+    b = str(c.get("broker") or "kite").strip().lower()
+    return b if b in ("dhan", "fyers") else "kite"
 
 
 def kite_ready(c, kite_state, today):
     """(ok, why): live mode needs the broker's switch (kite_enabled, or broker dhan with dhan_enabled) and a
     connection check from today."""
     bro = broker_of(c)
-    if bro == "dhan":
-        if not c.get("dhan_enabled"):
-            return False, ("\"mode\" is \"live\" and \"broker\" is \"dhan\" but \"dhan_enabled\" is not true: live orders "
-                           "stay off until you set it yourself and connect Dhan (docs/DHAN.md)")
+    if bro in ("dhan", "fyers"):
+        nm = "Dhan" if bro == "dhan" else "FYERS"
+        if not c.get("%s_enabled" % bro):
+            return False, ("\"mode\" is \"live\" and \"broker\" is \"%s\" but \"%s_enabled\" is not true: live orders "
+                           "stay off until you set it yourself and connect %s (docs/%s.md)" % (bro, bro, nm, nm.upper()))
         ks = kite_state or {}
         if not ks.get("verified") or str(ks.get("date")) != today:
-            return False, ("Dhan is not verified today: run trader-broker's dhan.py check after you connect Dhan today")
+            return False, ("%s is not verified today: run trader-broker's %s.py check after you connect %s today" % (nm, bro, nm))
         return True, ""
     if not c.get("kite_enabled"):
         return False, ("\"mode\" is \"live\" but \"kite_enabled\" is not true: live orders stay off until you set "

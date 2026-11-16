@@ -7,7 +7,7 @@ from _load import ROOT
 
 DOCS = os.path.join(ROOT, "docs")
 FILES = ["README.md", "HOW_TO_USE.md", "GETTING_STARTED.md", "DAILY_ROUTINE.md", "SKILLS.md", "SAFETY.md", "CONFIG.md", "DATA_FILES.md",
-         "NOTION.md", "GO_LIVE.md", "ARCHITECTURE.md", "TROUBLESHOOTING.md", "GLOSSARY.md", "AUDIT.md", "ROADMAP.md", "PHASE_2_UI.md", "PHASE_3_DHAN.md", "DHAN.md"]
+         "NOTION.md", "GO_LIVE.md", "ARCHITECTURE.md", "TROUBLESHOOTING.md", "GLOSSARY.md", "AUDIT.md", "ROADMAP.md", "PHASE_2_UI.md", "PHASE_3_DHAN.md", "DHAN.md", "FYERS.md"]
 
 
 def read(*parts):
@@ -74,7 +74,7 @@ class Docs(unittest.TestCase):
 
     def test_the_safety_page_states_the_rules(self):
         text = " ".join(read("docs", "SAFETY.md").split())
-        for want in ("No tool ever changes `mode`, `broker`, `dhan_enabled` or `kite_enabled`", "Your typed \"yes\" for that one order", "Allow once",
+        for want in ("No tool ever changes `mode`, `broker`, `dhan_enabled`, `fyers_enabled` or `kite_enabled`", "Your typed \"yes\" for that one order", "Allow once",
                      "Nothing from a background or scheduled task", "trader/STOP", "0.3%", "Most individual intraday traders lose money",
                      "TOTP", "including Claude"):
             self.assertIn(want, text, want)

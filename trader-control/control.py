@@ -165,7 +165,7 @@ def to_tick(price, tick, way="nearest"):
     return round(n * t / 100.0, 2)
 # ---------------------------------------------------------------- end NSE clock
 
-NEVER_BY_TOOL = ("mode", "kite_enabled", "dhan_enabled", "broker")
+NEVER_BY_TOOL = ("mode", "kite_enabled", "dhan_enabled", "fyers_enabled", "broker")
 SECRET_WORDS = ("token", "secret", "password", "api_key", "apikey", "totp")
 PLAIN_KEYS = {"max_trades_per_day", "max_open_positions", "cash_buffer_pct", "min_reward_risk",
               "max_charges_pct_of_target", "no_entries_before", "no_entries_after", "flat_by", "paper_slippage_pct",

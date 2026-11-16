@@ -447,7 +447,7 @@ class TheCheckStep(Base):
         self.assertIn("Dhan verified for 2026-10-30", out)
         st = self.read("trader/state/dhan2.json")
         self.assertEqual((st["verified"], st["broker"]), (True, "dhan"))
-        self.assertTrue(st["static_ip_confirmed_by_user"] and st["order_tools_need_approval_confirmed_by_user"])
+        self.assertTrue("static_ip_confirmed" in st["extra_confirmations_by_user"] and st["order_tools_need_approval_confirmed_by_user"])
         self.assertNotIn("dhanClientId", json.dumps(st))                       # no account details are stored
 
     def test_an_unexpected_position_or_no_map_fails(self):

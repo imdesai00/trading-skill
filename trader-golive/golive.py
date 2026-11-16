@@ -307,7 +307,62 @@ def report_lines(a):
 def steps(half_risk=250, broker="dhan"):
     if broker == "dhan":
         return _steps_dhan(half_risk)
+    if broker == "fyers":
+        return _steps_fyers(half_risk)
     return _steps_kite(half_risk)
+
+
+RECHECK_FYERS = [
+    "Whether FYERS's official MCP server places orders for your account today, and its real tool list. Put the real names in "
+    "\"fyers_tools\" in your config.",
+    "Whether FYERS's order APIs need a registered static IP on your route, and that it is registered.",
+    "How long the login lasts and how you connect each morning.",
+    "That a plain INTRADAY market order and an SL-M stop order are accepted for NSE equity (else set stop_order_type to SL).",
+    "The real field names and status codes in the orders, trades, positions, funds and quotes results.",
+    "That the returned order tag carries your orderTag (the duplicate guard reads it).",
+    "FYERS's intraday auto square-off time against your flat_by.",
+    "Every rate in the charges table in trader/config.json, against FYERS's pricing page.",
+    "Tick size per symbol against the NSE band table.",
+    "Whether Yahoo's .NS quotes match FYERS's prices closely enough to size trades on.",
+]
+
+
+def _steps_fyers(half_risk):
+    return [
+        ("Decide", [
+            "Read the report above and your records yourself. Go live only if YOU are satisfied. If the result sat inside "
+            "the noise, that is a reason to keep paper trading, not to stop reading the report.",
+            "Decide the most you can lose, in money you can afford to lose, before you connect anything."]),
+        ("Connect FYERS (only you do this)", [
+            "FYERS's docs list an official MCP server (reported address https://mcp.fyers.in/mcp); an older FYERS post says "
+            "it could not place orders. Ask FYERS or read its docs, then add it to Claude yourself and approve its login yourself.",
+            "Never paste a token, password, app secret or TOTP code into a chat, and never put one in this folder. Do not use "
+            "third-party FYERS servers through this pack.",
+            "Do not place real orders from TradingView's FYERS panel while you use this pack: those orders skip the risk "
+            "check, your typed yes and the database."]),
+        ("Set every order tool to \"Needs approval\"", [
+            "In Claude (Customize > Connectors > the FYERS connector > tool permissions) set the place, modify, cancel, basket "
+            "and scheduled-order tools to Needs approval, never Always allow. Read-only tools may stay on Always allow."]),
+        ("Re-verify what could not be verified", ["Check each of these against the live docs and your account:"] +
+         ["[ ] " + x for x in RECHECK_FYERS]),
+        ("Switch it on yourself, at half the paper risk", [
+            "Edit trader/config.json yourself (the tools never do): set \"mode\": \"live\", \"broker\": \"fyers\", "
+            "\"fyers_enabled\": true and \"max_loss_per_trade_inr\": %d for the first 2 weeks live, half the paper risk."
+            % half_risk,
+            "At half the risk the shares halve, so charges are a bigger share of each small target: expect more trades refused."]),
+        ("Every live day", [
+            "Connect FYERS yourself, save the profile, funds and positions results, then: fyers.py check --profile F "
+            "--margins F --positions F --tools-need-approval --static-ip-confirmed.",
+            "A live trade is three orders, each with its own trader-risk check, its own typed yes and Claude's own Allow once "
+            "card: the entry, the stop-loss after it fills (fyers.py stop-ticket), and the exit (cancel the stop first). "
+            "Never \"yes to all\"; never from a scheduled task.",
+            "Sync after the fills: fyers.py sync; after 15:30 run fyers.py reconcile. Act on every WARNING and DISCREPANCY line at once."]),
+        ("Keep the record", [
+            "Every live trade is in the database with Mode = live: run report.py weekly --mode live each Friday.",
+            "Compare the live results with the paper record. Real slippage will show up there."]),
+        ("Only then think about full size", [
+            "After 2 weeks at %s per trade, look at the live record the same way as this report. Whether to go "
+            "back to the full per-trade risk is your decision, made by editing your own config." % inr(half_risk)])]
 
 
 def _steps_dhan(half_risk):
@@ -410,7 +465,8 @@ def steps_lines(half_risk=250, broker="dhan"):
         L.append("")
     L.append("Config you will edit yourself (shown, not written):")
     L.append('   "mode": "live", %s, "max_loss_per_trade_inr": %d' % (
-        '"broker": "dhan", "dhan_enabled": true' if broker == "dhan" else '"kite_enabled": true', half_risk))
+        '"broker": "dhan", "dhan_enabled": true' if broker == "dhan" else
+        '"broker": "fyers", "fyers_enabled": true' if broker == "fyers" else '"kite_enabled": true', half_risk))
     L.append("Not financial advice. Real money can be lost.")
     return L
 
@@ -457,7 +513,7 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("steps", help="the steps you take yourself to go live")
     p.add_argument("--half-risk", type=int, default=250)
-    p.add_argument("--broker", choices=["dhan", "kite"], default="dhan")
+    p.add_argument("--broker", choices=["dhan", "fyers", "kite"], default="dhan")
     p.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if not a.cmd:

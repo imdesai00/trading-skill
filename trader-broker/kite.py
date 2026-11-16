@@ -406,6 +406,30 @@ class KiteAdapter(object):
     def cash_of(self, margins):
         return available_cash(margins)
 
+    WRAP = {"orders": ("orders", "orderBook"), "trades": ("trades", "tradeBook"),
+            "positions": ("net", "netPositions", "positions")}
+
+    def unwrap(self, doc, kind):
+        """The list of rows inside a saved tool result, whether it is a bare list or wrapped ({"data": [...]},
+        {"orderBook": [...]}, {"net": [...]}). Anything else gives an empty list."""
+        if doc is None:
+            return []
+        if isinstance(doc, list):
+            return doc
+        if isinstance(doc, dict):
+            for k in self.WRAP.get(kind, ()) + ("data",):
+                v = doc.get(k)
+                if isinstance(v, list):
+                    return v
+                if isinstance(v, dict):
+                    for k2 in self.WRAP.get(kind, ()):
+                        if isinstance(v.get(k2), list):
+                            return v[k2]
+            for v in doc.values():
+                if isinstance(v, list):
+                    return v
+        return []
+
     def err(self, msg):
         return KiteError(str(msg).replace("Kite", self.NAME))
 
@@ -512,7 +536,7 @@ class KiteAdapter(object):
 
     def refuse_duplicates(self, call, open_orders):
         tag = self.tag_of_call(call)
-        if tag and any(str(self.tag_of_order(self.norm_order(o))) == tag for o in (open_orders or [])):
+        if tag and any(str(self.tag_of_order(self.norm_order(o))) == tag for o in self.unwrap(open_orders, "orders")):
             raise self.err("an order with this order's tag is already at Kite: it was placed once. Check "
                             "get_orders instead of placing it again")
 
@@ -662,11 +686,10 @@ class KiteAdapter(object):
         self.require_enabled()
         lstore, led = self.load_live()
         rates = chg.rates_from(self.cfg)
-        orders = [self.norm_order(o) for o in orders or []]
-        trades = [self.norm_trade(x) for x in trades or []]
+        orders = [self.norm_order(o) for o in self.unwrap(orders, "orders")]
+        trades = [self.norm_trade(x) for x in self.unwrap(trades, "trades")]
         if positions is not None:
-            raw = (positions.get("net") if isinstance(positions, dict) else positions) or []
-            positions = {"net": [self.norm_position(p_) for p_ in raw]}
+            positions = {"net": [self.norm_position(p_) for p_ in self.unwrap(positions, "positions")]}
         by_id = {str(o.get("order_id")): o for o in orders or []}
         msgs = []
         for t in led["trades"]:
@@ -765,7 +788,7 @@ class KiteAdapter(object):
         msgs = self.sync(orders, trades, positions)
         diffs = []
         st, led = self.load_live()
-        trades = [self.norm_trade(x) for x in trades or []]
+        trades = [self.norm_trade(x) for x in self.unwrap(trades, "trades")]
         kite_trades = [x for x in trades if str(x.get("product", "MIS")).upper() == "MIS"]
         known_orders = {str(t.get(k)) for t in led["trades"] for k in ("entry_order_id", "stop_order_id", "exit_order_id")
                         if t.get(k)}
@@ -786,8 +809,7 @@ class KiteAdapter(object):
                     db.set_meta(self.db_path(), "kite_account", {
                         "at": self.now.strftime("%Y-%m-%dT%H:%M:%SZ"), "balance": cash,
                         "positions": [{"symbol": str(p.get("tradingsymbol")), "qty": int(p.get("quantity") or 0)}
-                                      for p in [self.norm_position(q) for q in
-                                                ((positions.get("net") if isinstance(positions, dict) else positions) or [])]
+                                      for p in [self.norm_position(q) for q in self.unwrap(positions, "positions")]
                                       if int(p.get("quantity") or 0)]})
                 if abs(cash - float(led["balance"])) > 1.0:
                     diffs.append(("balance", None, "Kite shows %s available; this record says %s. Kite is the truth; the "
@@ -845,6 +867,86 @@ def stop_order_for(trade, cfg):
 
 def _cfg(a):
     return read_json(a.config, "config") or {}
+
+
+def price_exit_reason(t, vwap, last_t):
+    """Which way a position ended, judged from the exit price when order ids cannot say: the hint the user gave, then
+    target, stop, flat-by, else manual."""
+    hint = t.get("exit_reason_hint")
+    if hint in ("target", "flat-by", "manual"):
+        return hint
+    tgt, stop = t.get("target"), t.get("stop")
+    if tgt and stop and vwap >= tgt - 0.005:
+        return "target"
+    if tgt and stop and abs(vwap - stop) <= abs(vwap - tgt) and vwap <= (t.get("entry_fill") or vwap):
+        return "stop"
+    hh = _hhmm(last_t)
+    return "flat-by" if hh and hh >= t["flat_by"] else "manual"
+
+
+def live_check(a, key, name, cls, extra_problems=None, extra_flags=()):
+    """The read-only connection check shared by the Dhan and FYERS adapters. No order is possible until it passes today.
+    key: the config key of the broker ("dhan"); extra_flags: [(attribute, plain words for the refusal)]."""
+    cfg = _cfg(a)
+    now = parse_now(a.now)
+    today = to_ist(now).date().isoformat()
+    for k, want in (("mode", "live"), ("broker", key), ("%s_enabled" % key, True)):
+        have = str(cfg.get(k)).lower() if k in ("mode", "broker") else cfg.get(k)
+        if have != want:
+            say("%s.py: \"%s\" must be %s (set by you, in trader/config.json) before the adapter does anything."
+                % (key, k, ("\"%s\"" % want) if isinstance(want, str) else "true"), file=sys.stderr)
+            return 1
+    prof = read_json(a.profile, "the saved profile or funds result (save what the tool returned)")
+    if not isinstance(prof, dict) or not prof or "error" in prof or str(prof.get("s", "ok")).lower() == "error":
+        say("%s.py: that does not look like a %s result (empty or an error): connect again and call the profile tool."
+            % (key, name), file=sys.stderr)
+        return 1
+    if not a.tools_need_approval:
+        say("%s.py: not verified. Every %s tool that places, modifies, cancels or exits orders must be set to \"Needs "
+            "approval\" in Claude (Customize, Connectors, the %s connector). A script cannot see that setting: check it "
+            "yourself, then run this again with --tools-need-approval." % (key, name, name), file=sys.stderr)
+        return 1
+    for attr, words in extra_flags:
+        if not getattr(a, attr, False):
+            say("%s.py: not verified. %s" % (key, words), file=sys.stderr)
+            return 1
+    ad = cls(cfg, None, a.base, now)
+    problems, notes = list(extra_problems(cfg) if extra_problems else []), []
+    if a.margins:
+        cash = ad.cash_of(_load_saved(a.margins, "the saved funds result"))
+        notes.append("%s shows %s available." % (name, inr(cash, True) if cash is not None else "no readable cash figure"))
+        if cash is None:
+            problems.append("the funds result has no cash figure I can read")
+        elif cash <= 0:
+            problems.append("%s shows no available cash" % name)
+    else:
+        problems.append("pass --margins (the funds result): the available cash must be read")
+    if a.positions:
+        pos = _load_saved(a.positions, "the saved positions result")
+        open_pos = {}
+        for p in (ad.norm_position(q) for q in ad.unwrap(pos, "positions") if isinstance(q, dict)):
+            if p["quantity"]:
+                open_pos[p["tradingsymbol"]] = p["quantity"]
+        _, led = ad.load_live()
+        ours = {t["symbol"]: t["qty"] for t in led["trades"] if t["status"] in ("open", "pending_fill")}
+        for sym, q in open_pos.items():
+            if ours.get(sym) != q:
+                problems.append("%s shows %d %s open and this record has %s: unexpected position" % (name, q, sym, ours.get(sym, 0)))
+        notes.append("%d open position%s at %s." % (len(open_pos), "" if len(open_pos) == 1 else "s", name))
+    else:
+        problems.append("pass --positions (the positions result): unexpected open positions must be ruled out")
+    if problems:
+        say("%s.py: NOT verified:" % key, file=sys.stderr)
+        for pr in problems:
+            say("  - " + pr, file=sys.stderr)
+        return 1
+    write_json(a.out, {"verified": True, "date": today, "broker": key, "checked_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                       "order_tools_need_approval_confirmed_by_user": True,
+                       "extra_confirmations_by_user": [attr for attr, _ in extra_flags],
+                       "note": "no account details are stored"})
+    say("%s verified for %s. %s" % (name, today, " ".join(notes)))
+    say("%s's login lasts one day: connect again tomorrow before you trade." % name)
+    return 0
 
 
 NAME = "Kite"          # dhan.py sets these before it reuses the commands below
