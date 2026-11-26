@@ -11,7 +11,7 @@ description: >-
   command lists the exact steps you take yourself to go live with Zerodha
   Kite: connect it, set every order tool to Needs approval, re-verify the
   open questions, set mode and kite_enabled, start at half the paper risk
-  (₹250 a trade) for two weeks, and keep logging in Notion. Use when the user
+  (₹250 a trade) for two weeks, and keep reading the daily reports. Use when the user
   says "am I ready to go live", "review my paper trading", "how did the four
   weeks go", "is this luck", "go live", "connect Kite", or after the paper
   period.
@@ -35,8 +35,8 @@ python3 "${CLAUDE_SKILL_DIR}/golive.py" check --json
 python3 "${CLAUDE_SKILL_DIR}/golive.py" steps                    # what YOU do to go live
 ```
 
-If the local files were lost, rebuild the paper log from Notion first
-(trader-journal, "rebuild"); `check` says when the record was rebuilt.
+If the local files were lost, restore the newest good backup first
+(`db.py restore`) and run `db.py check`.
 
 ## What `check` reports
 
@@ -78,8 +78,8 @@ and the three GTT tools) to Needs approval; re-verify the open questions in
 VERIFY.md; edit `trader/config.json` yourself to `"mode": "live"`,
 `"kite_enabled": true` and `"max_loss_per_trade_inr": 250` for the first two
 weeks; the daily routine live (a login each day, three orders per trade, each
-with its own risk check, typed yes and Allow once card); keep logging in Notion
-with Mode = live; and only after two weeks consider the full risk again.
+with its own risk check, typed yes and Allow once card); keep reading the daily reports
+(live is kept apart from paper); and only after two weeks consider the full risk again.
 
 ## What it never does
 

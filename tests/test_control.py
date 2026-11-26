@@ -210,17 +210,16 @@ class Morning(Base):
         write(os.path.join(self.t, "state", "market.json"), {"date": "2026-10-30", "vix": 21.0, "nifty_gap_pct": 0.2})
         write(os.path.join(self.t, "state", "results_today.json"), {"date": "2026-10-30", "symbols": {"SYNTHA": "Q2"}})
         write(os.path.join(self.t, "watchlist.json"), {"mode": "daily", "as_of": "2026-10-29 close", "hits": [{"symbol": "SYNTHA"}]})
-        db.save_outbox(self.dbp, [{"key": "paper_trades:PT-1", "db": "paper_trades", "id": "PT-1", "hash": "h", "props": {},
-                                   "queued_at": "t"}])
         self.ctl("pause", "--reason", "testing")
         code, out, _ = self.ctl("morning")
         self.assertEqual(code, 0)
         for want in ("MORNING CHECK, Fri 2026-10-30", "open day (09:15 to 15:30)", "Mode: PAPER", "PAPER account: balance ₹1,00,000.00",
                      "Limits used: today ₹0.00 of ₹1,500,", "BLOCKED: trading is PAUSED", "Database: intact",
-                     "Last backup: none yet", "Notion sync: 1 row waiting", "index expiry day" if False else "Events today",
+                     "Last backup: none yet", "Events today",
                      "RESULTS TODAY (half size): SYNTHA", "India VIX 21.0", "Scan: daily, 1 hit", "PROTECTION DATA MISSING (paper warns only)",
                      "TOTP"):
             self.assertIn(want, out)
+        self.assertNotIn("Notion", out)
 
     def test_a_holiday_and_no_database(self):
         os.remove(self.dbp)

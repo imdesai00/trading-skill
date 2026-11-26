@@ -235,7 +235,7 @@ def fingerprint(order):
 def new_ledger(cfg):
     capital = float(cfg.get("capital_inr") or DEFAULTS["capital_inr"])
     return {"mode": "paper", "capital": capital, "balance": capital, "trades": [], "skipped": [],
-            "note": "Paper trading only: no broker was contacted. Notion is the permanent record."}
+            "note": "Paper trading only: no broker was contacted. The record is in trader/trader.db."}
 
 
 def load_ledger(path, cfg):
@@ -783,7 +783,7 @@ def cmd_feel(a):
     if not st.uses_db:
         raise PaperError("notes are kept in the database: run db.py init and db.py migrate first")
     db.add_note(st.db_path, a.trade, "feel", a.text, "paper", parse_now(getattr(a, "now", None)))
-    print("Saved how you felt about %s. It goes to the Notion journal at the next sync." % a.trade)
+    print("Saved how you felt about %s. It shows in the daily report (report.py daily)." % a.trade)
     return 0
 
 
@@ -880,4 +880,9 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):      # Windows consoles default to a code page that cannot print the rupee sign
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     sys.exit(main())

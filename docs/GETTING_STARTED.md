@@ -1,7 +1,7 @@
 # Getting started
 
 This takes about an afternoon. You do not need to know how to program. You do need: a computer, Python 3.8 or newer, Claude (Claude
-Code, Claude Cowork or Claude Desktop with skills), and a Notion account if you want the journal (you do).
+Code, Claude Cowork or Claude Desktop with skills).
 
 ## 1. Check Python
 
@@ -44,10 +44,9 @@ python3 <path-to-pack>/trader-db/db.py check
 
 It should say the database is intact.
 
-## 5. Connect Notion (the journal)
+## 5. Reports
 
-Connect Notion to Claude through Claude's Connectors screen. **Never give a Notion token to any tool in this pack**; it never asks. Then
-tell Claude "set up the Notion journal" and name the Notion page where it may create things. Details are in [NOTION.md](NOTION.md).
+Nothing to connect. `report.py daily` and `report.py weekly` write plain Markdown reports into `trader/reports/` from the local database.
 
 ## 6. Try the safe things first
 
@@ -69,17 +68,17 @@ to get them and how to load them. Do this on day one: it is the part most people
 ## 8. Your first paper day
 
 Follow [DAILY_ROUTINE.md](DAILY_ROUTINE.md). On the first day, expect most setups to be refused by the budget manager or the risk manager. That is
-the pack working: with ₹500 of risk and Zerodha's charges, many trades are not worth taking.
+the pack working: with ₹500 of risk and the broker's charges, many trades are not worth taking.
 
 ## 9. Security reminders (read these now, not later)
 
-- Turn on **Zerodha's TOTP two-factor login** before you ever connect an API.
-- **Never share your Kite API key, secret, password, TOTP code or access token** with anyone, **including Claude**. If a tool or a chat asks for one,
+- Turn on **two-factor login (TOTP) at your broker** before you ever connect an API.
+- **Never share a broker API key, secret, password, TOTP code or access token** with anyone, **including Claude**. If a tool or a chat asks for one,
   stop.
-- Kite credentials, if you ever use them, live in environment variables or in a config file you edit yourself, outside this folder. This pack never
+- Broker credentials, if you ever use them, live in environment variables or in a config file you edit yourself, outside this folder. This pack never
   asks for them and never stores them.
 
 ## What "done" looks like for week one
 
 You can run the morning check without help, you have loaded the protection files at least twice, you have seen a trade refused and understood why,
-you have paper-traded at least one setup from start to finish, `db.py check` passes, and the Notion journal shows the day.
+you have paper-traded at least one setup from start to finish, `db.py check` passes, and `report.py daily` shows the day.

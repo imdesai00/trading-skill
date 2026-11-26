@@ -54,6 +54,22 @@ RECHECK = [
     "Whether Yahoo's .NS quotes match Kite's prices closely enough to size trades on.",
 ]
 
+RECHECK_DHAN = [
+    "The real tool list of Dhan's MCP connector (reported address https://mcp.dhan.co/mcp), and which tools place, modify, "
+    "cancel or exit orders, including super orders and forever orders. Put the real names in \"dhan_tools\" in your config.",
+    "Whether Dhan's order APIs need a registered static IP on your route (the API pages say they do) and whether it is registered.",
+    "The access login: how long it lasts and how you connect each morning (the API token is documented as 24 hours).",
+    "That a super order (entry, stop-loss and target legs) works for NSE equity INTRADAY, and what cancelling it does to its legs.",
+    "That an entry as a LIMIT super order fills as the docs say; Dhan converts API market orders to limit orders with price protection.",
+    "The numeric securityId for each symbol you trade, from Dhan's instrument list (python3 dhan.py securities --csv FILE).",
+    "The field names in get_orders, get_trades, get_positions, the funds result and the last-price result (VERIFY.md section 15).",
+    "Dhan's intraday auto square-off time (its own pages disagree: 3:10, 3:18 and 3:20 PM) against your flat_by.",
+    "Every rate in the charges table in trader/config.json, against dhan.co/pricing today.",
+    "Tick size per symbol against the NSE band table.",
+    "Whether Yahoo's .NS quotes match Dhan's prices closely enough to size trades on.",
+]
+DHAN_TOOLS_APPROVAL = ["the place-order tool", "the place-super-order tool", "the modify tools", "the cancel tools (order and "
+                       "super order)", "any forever-order (GTT) tool", "any exit-all or square-off tool"]
 KITE_TOOLS_APPROVAL = ["place_order", "modify_order", "cancel_order", "place_gtt_order", "modify_gtt_order",
                        "delete_gtt_order"]
 KITE_TOOLS_READONLY = ["get_profile", "get_orders", "get_trades", "get_order_history", "get_order_trades",
@@ -146,7 +162,7 @@ def analyse(led, cfg):
     n = len(trades)
     out = {"capital": capital, "n": n, "min_trades": c["min_trades_for_review"],
            "open": sum(1 for t in led.get("trades", []) if t.get("status") in ("open", "pending_fill")),
-           "skipped": len(led.get("skipped", [])), "rebuilt": bool(led.get("rebuilt_from_notion")),
+           "skipped": len(led.get("skipped", [])),
            "period_weeks": c["paper_period_weeks"]}
     if n == 0:
         return out
@@ -275,9 +291,7 @@ def report_lines(a):
     L.append("  - Paper fills are kinder than real ones: real stops slip, market orders move the price, and you")
     L.append("    will take longer than a minute to type yes.")
     L.append("  - A few weeks is one market mood. A different month can behave differently.")
-    L.append("  - It counts the trades you took. Trades you skipped, and the days you did not trade, are in Notion.")
-    if a["rebuilt"]:
-        L.append("  - This record was rebuilt from Notion: open trades came back without their internal details.")
+    L.append("  - It counts the trades you took. Trades you skipped, and the days you did not trade, are in the database and the daily reports.")
     L.append("")
     L.append("Most intraday traders lose money: SEBI's study of FY2022-23, as reported in the press (the sebi.gov.in")
     L.append("page itself was not checked), found about 7 in 10 individual intraday traders in the cash segment lost")
@@ -288,10 +302,116 @@ def report_lines(a):
 
 # ---------------------------------------------------------------- the steps
 
-def steps(half_risk=250):
+def steps(half_risk=250, broker="dhan"):
+    if broker == "dhan":
+        return _steps_dhan(half_risk)
+    if broker == "fyers":
+        return _steps_fyers(half_risk)
+    return _steps_kite(half_risk)
+
+
+RECHECK_FYERS = [
+    "Whether FYERS's official MCP server places orders for your account today, and its real tool list. Put the real names in "
+    "\"fyers_tools\" in your config.",
+    "Whether FYERS's order APIs need a registered static IP on your route, and that it is registered.",
+    "How long the login lasts and how you connect each morning.",
+    "That a plain INTRADAY market order and an SL-M stop order are accepted for NSE equity (else set stop_order_type to SL).",
+    "The real field names and status codes in the orders, trades, positions, funds and quotes results.",
+    "That the returned order tag carries your orderTag (the duplicate guard reads it).",
+    "FYERS's intraday auto square-off time against your flat_by.",
+    "Every rate in the charges table in trader/config.json, against FYERS's pricing page.",
+    "Tick size per symbol against the NSE band table.",
+    "Whether Yahoo's .NS quotes match FYERS's prices closely enough to size trades on.",
+]
+
+
+def _steps_fyers(half_risk):
     return [
         ("Decide", [
-            "Read the report above and the Notion record yourself. Go live only if YOU are satisfied. If the "
+            "Read the report above and your records yourself. Go live only if YOU are satisfied. If the result sat inside "
+            "the noise, that is a reason to keep paper trading, not to stop reading the report.",
+            "Decide the most you can lose, in money you can afford to lose, before you connect anything."]),
+        ("Connect FYERS (only you do this)", [
+            "FYERS's docs list an official MCP server (reported address https://mcp.fyers.in/mcp); an older FYERS post says "
+            "it could not place orders. Ask FYERS or read its docs, then add it to Claude yourself and approve its login yourself.",
+            "Never paste a token, password, app secret or TOTP code into a chat, and never put one in this folder. Do not use "
+            "third-party FYERS servers through this pack.",
+            "Do not place real orders from TradingView's FYERS panel while you use this pack: those orders skip the risk "
+            "check, your typed yes and the database."]),
+        ("Set every order tool to \"Needs approval\"", [
+            "In Claude (Customize > Connectors > the FYERS connector > tool permissions) set the place, modify, cancel, basket "
+            "and scheduled-order tools to Needs approval, never Always allow. Read-only tools may stay on Always allow."]),
+        ("Re-verify what could not be verified", ["Check each of these against the live docs and your account:"] +
+         ["[ ] " + x for x in RECHECK_FYERS]),
+        ("Switch it on yourself, at half the paper risk", [
+            "Edit trader/config.json yourself (the tools never do): set \"mode\": \"live\", \"broker\": \"fyers\", "
+            "\"fyers_enabled\": true and \"max_loss_per_trade_inr\": %d for the first 2 weeks live, half the paper risk."
+            % half_risk,
+            "At half the risk the shares halve, so charges are a bigger share of each small target: expect more trades refused."]),
+        ("Every live day", [
+            "Connect FYERS yourself, save the profile, funds and positions results, then: fyers.py check --profile F "
+            "--margins F --positions F --tools-need-approval --static-ip-confirmed.",
+            "A live trade is three orders, each with its own trader-risk check, its own typed yes and Claude's own Allow once "
+            "card: the entry, the stop-loss after it fills (fyers.py stop-ticket), and the exit (cancel the stop first). "
+            "Never \"yes to all\"; never from a scheduled task.",
+            "Sync after the fills: fyers.py sync; after 15:30 run fyers.py reconcile. Act on every WARNING and DISCREPANCY line at once."]),
+        ("Keep the record", [
+            "Every live trade is in the database with Mode = live: run report.py weekly --mode live each Friday.",
+            "Compare the live results with the paper record. Real slippage will show up there."]),
+        ("Only then think about full size", [
+            "After 2 weeks at %s per trade, look at the live record the same way as this report. Whether to go "
+            "back to the full per-trade risk is your decision, made by editing your own config." % inr(half_risk)])]
+
+
+def _steps_dhan(half_risk):
+    return [
+        ("Decide", [
+            "Read the report above and your daily and weekly reports (report.py) yourself. Go live only if YOU are satisfied. If the "
+            "result sat inside the noise, that is a reason to keep paper trading, not to stop reading the report.",
+            "Decide the most you can lose, in money you can afford to lose, before you connect anything."]),
+        ("Connect Dhan (only you do this)", [
+            "Dhan describes a first-party MCP server (reported address https://mcp.dhan.co/mcp) that can place, modify "
+            "and cancel orders, including super orders. Add it to Claude yourself and approve its consent screen yourself.",
+            "Never paste a token, password, client secret or TOTP code into a chat, and never put one in this folder. "
+            "If a route needs credentials, they live in environment variables or in a config you edit yourself.",
+            "Read on Dhan's own site what API and MCP access needs: any subscription, and the static-IP rule for order "
+            "APIs (and whether your route needs it)."]),
+        ("Set every order tool to \"Needs approval\"", [
+            "In Claude (Customize > Connectors > the Dhan connector > tool permissions) set each of these to Needs "
+            "approval, never Always allow: " + ", ".join(DHAN_TOOLS_APPROVAL) + ".",
+            "Read-only tools (profile, funds, orders, trades, positions, quotes) may stay on Always allow."]),
+        ("Map symbols to Dhan's securityIds", [
+            "Download Dhan's instrument list yourself, then: python3 trader-broker/dhan.py securities --csv FILE. "
+            "An order for a symbol with no id is refused."]),
+        ("Re-verify what could not be verified", ["Check each of these against the live docs and your account:"] +
+         ["[ ] " + x for x in RECHECK_DHAN]),
+        ("Switch it on yourself, at half the paper risk", [
+            "Edit trader/config.json yourself (the tools never do): set \"mode\": \"live\", \"broker\": \"dhan\", "
+            "\"dhan_enabled\": true and \"max_loss_per_trade_inr\": %d for the first 2 weeks live, half the paper risk."
+            % half_risk,
+            "At half the risk the shares halve, so charges are a bigger share of each small target: expect more "
+            "trades refused by the 25 % charges rule. That is the rule working.",
+            "Leave the daily, weekly and drawdown limits as they are unless you decide otherwise."]),
+        ("Every live day", [
+            "Connect Dhan yourself, save the profile, funds and positions results, then: dhan.py check --profile F "
+            "--margins F --positions F --tools-need-approval --static-ip-confirmed.",
+            "An entry is ONE super order (entry, stop-loss and target together): one trader-risk check, one typed yes, "
+            "one Allow once card. Entries are limit orders (size.py --limit). Leaving early is two steps, each with its "
+            "own yes: cancel the super order, then sell. Never \"yes to all\"; never from a scheduled task.",
+            "Sync after the fills: dhan.py sync with the saved orders, trades and positions results; after 15:30 run "
+            "dhan.py reconcile. Act on every WARNING and DISCREPANCY line at once."]),
+        ("Keep the record", [
+            "Every live trade is in the database with Mode = live: run report.py weekly --mode live each Friday.",
+            "Compare the live results with the paper record each Friday. Real slippage will show up there."]),
+        ("Only then think about full size", [
+            "After 2 weeks at %s per trade, look at the live record the same way as this report. Whether to go "
+            "back to the full per-trade risk is your decision, made by editing your own config." % inr(half_risk)])]
+
+
+def _steps_kite(half_risk):
+    return [
+        ("Decide", [
+            "Read the report above and your daily and weekly reports (report.py) yourself. Go live only if YOU are satisfied. If the "
             "result sat inside the noise, that is a reason to keep paper trading, not to stop reading the report.",
             "Decide the most you can lose, in money you can afford to lose, before you connect anything."]),
         ("Connect Kite (only you do this)", [
@@ -327,22 +447,24 @@ def steps(half_risk=250):
             "Sync after the fills: kite.py sync with the saved get_orders / get_trades / get_positions results. "
             "Act on every WARNING line at once (no stop, rejected stop, position mismatch)."]),
         ("Keep the record", [
-            "Keep logging every live trade in Notion with Mode = live: journal.py queue --mode live, then sync.",
+            "Every live trade is in the database with Mode = live: run report.py weekly --mode live each Friday.",
             "Compare the live results with the paper record each Friday. Real slippage will show up there."]),
         ("Only then think about full size", [
             "After 2 weeks at %s per trade, look at the live record the same way as this report. Whether to go "
             "back to the full per-trade risk is your decision, made by editing your own config." % inr(half_risk)])]
 
 
-def steps_lines(half_risk=250):
+def steps_lines(half_risk=250, broker="dhan"):
     L = ["Going live: the steps YOU take, in order. Nothing here is done for you, and nothing switches itself on.", ""]
-    for i, (title, items) in enumerate(steps(half_risk), 1):
+    for i, (title, items) in enumerate(steps(half_risk, broker), 1):
         L.append("%d. %s" % (i, title))
         for it in items:
             L.append("   - " + it if not it.startswith("[ ]") else "   " + it)
         L.append("")
     L.append("Config you will edit yourself (shown, not written):")
-    L.append('   "mode": "live", "kite_enabled": true, "max_loss_per_trade_inr": %d' % half_risk)
+    L.append('   "mode": "live", %s, "max_loss_per_trade_inr": %d' % (
+        '"broker": "dhan", "dhan_enabled": true' if broker == "dhan" else
+        '"broker": "fyers", "fyers_enabled": true' if broker == "fyers" else '"kite_enabled": true', half_risk))
     L.append("Not financial advice. Real money can be lost.")
     return L
 
@@ -371,9 +493,9 @@ def cmd_check(a):
 
 def cmd_steps(a):
     if a.json:
-        print(json.dumps([{"title": t, "items": i} for t, i in steps(a.half_risk)], indent=2, ensure_ascii=False))
+        print(json.dumps([{"title": t, "items": i} for t, i in steps(a.half_risk, a.broker)], indent=2, ensure_ascii=False))
     else:
-        print("\n".join(steps_lines(a.half_risk)))
+        print("\n".join(steps_lines(a.half_risk, a.broker)))
     return 0
 
 
@@ -389,6 +511,7 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("steps", help="the steps you take yourself to go live")
     p.add_argument("--half-risk", type=int, default=250)
+    p.add_argument("--broker", choices=["dhan", "fyers", "kite"], default="dhan")
     p.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if not a.cmd:
@@ -402,4 +525,9 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):      # Windows consoles default to a code page that cannot print the rupee sign
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     sys.exit(main())

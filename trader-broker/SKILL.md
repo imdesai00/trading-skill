@@ -174,6 +174,27 @@ The full steps come with the Kite adapter. The outline, from VERIFY.md:
 - Never switches `"mode"` or `"kite_enabled"`. You do that yourself.
 - Never promises a fill price: a market order and a stop fill at whatever the market gives.
 
+## FYERS (added 2026-11-16)
+
+`fyers.py` is the live adapter for FYERS; it builds on `kite.py`. Read `docs/FYERS.md` first. It uses the same three-order design as Zerodha
+(entry, separate SL-M stop with `fyers.py stop-ticket`, exit = cancel the stop then sell) because FYERS's bracket and cover products are reported
+as deprecated. Live needs `"mode": "live"`, `"broker": "fyers"` and `"fyers_enabled": true`, set by the user, and `fyers.py check` from today (with
+`--tools-need-approval` and `--static-ip-confirmed`, which only the user can confirm). FYERS names stocks `NSE:SBIN-EQ`, so no id map is needed.
+Real tool names go in `fyers_tools`. Nothing is verified against FYERS's pages. **TradingView paper trading is not integrated** (no API found; NSE
+symbols reportedly blocked): the pack's own paper broker is the paper account. Never suggest placing real orders from TradingView's FYERS panel while
+this pack is in use: they skip the risk check, the typed yes and the database.
+
+## Dhan, the chosen broker (added 2026-11-16)
+
+`dhan.py` is the live adapter for Dhan; it builds on `kite.py` (same folder) for the gates and the bookkeeping. Read `docs/DHAN.md` first.
+It makes no network call and holds no credential: in live mode Claude calls Dhan's MCP tools, each behind Claude's own Allow once card.
+
+- Live needs `"mode": "live"`, `"broker": "dhan"` and `"dhan_enabled": true`, all set by the user, and `dhan.py check` from today (with `--tools-need-approval` and `--static-ip-confirmed`, which only the user can confirm).
+- A live entry is **one super order** (entry, stop-loss and target legs): one risk check, one typed yes, one Allow once card. The entry must be a limit order: run `size.py --limit`. Leaving early is two yes-es: cancel the super order, then sell.
+- Dhan uses numeric `securityId`s: build the map with `dhan.py securities --csv FILE`. Dhan's real MCP tool names are unknown until the user connects: they go in `dhan_tools` in the config. Say so plainly; do not guess names.
+- Commands: `dhan.py securities | check | prepare | record | sync | reconcile | set-charges | prices | status`, with the same meaning as the `kite.py` ones. `prepare` needs `--ltp` and `--margins` (the saved last-price and funds results) for an entry.
+- Everything in `docs/PHASE_3_DHAN.md` applies: nothing here is verified against Dhan's own pages.
+
 ## The database, the "why", and the live steps (added)
 
 - **Ask "Why are you taking this trade?" before the yes** and pass the user's answer with

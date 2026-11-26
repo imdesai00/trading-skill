@@ -1,8 +1,8 @@
 # VERIFY.md: what was checked, how, and what is still unverified
 
 Checked on **2026-10-29** (Thursday) from a cloud build sandbox, for the India
-conversion of day-trader-skill (NSE cash, intraday MIS, Zerodha Kite later,
-Notion journal).
+conversion of day-trader-skill (NSE cash, intraday MIS, Dhan, FYERS or Zerodha Kite later,
+local reports).
 
 ## Read this first: how much of this is really verified
 
@@ -170,25 +170,10 @@ open the SEBI page and confirm.
 Sources: https://www.business-standard.com/markets/news/over-70-intra-day-traders-incur-losses-during-fy23-reveals-sebi-study-124072401110_1.html,
 https://moneylife.in/article/7-out-of-10-individual-intraday-traders-in-equity-cash-segment-make-losses-sebi-study/74733.html.
 
-## 8. Notion connector (VERIFIED in this session)
+## 8. Notion (REMOVED)
 
-The Notion connector's tool schemas were loaded and read in this Claude session
-on 2026-10-29. Tool names as Claude sees them here: `notion-search`,
-`notion-fetch`, `notion-create-database`, `notion-create-pages`,
-`notion-update-page`, `notion-query-data-sources`, `notion-update-data-source`
-(plus others not needed). Your Cowork session may show them under a different
-prefix; the names after the prefix should match.
-
-| need | tool | notes |
-| --- | --- | --- |
-| Find the parent page you name | `notion-search`, `notion-fetch` | |
-| Create a page under a parent | `notion-create-pages` with `parent: {page_id}` | |
-| Create the 4 databases | `notion-create-database` with `parent: {page_id}` and a SQL DDL `schema` (`CREATE TABLE ("Trade ID" TITLE, "Net P&L ₹" NUMBER, "Exit reason" SELECT(...), ...)`) | returns a `collection://` data source id; that id is what goes in config |
-| Add a row | `notion-create-pages` with `parent: {data_source_id}` | dates as `date:Date:start`; numbers as numbers |
-| Update a row | `notion-update-page` `command: update_properties` with the row's page id | the outbox stores the page id once a row is created, so updates never duplicate |
-| Find a row by Trade ID / rebuild | `notion-query-data-sources`: `rows` mode (max 100 rows, no cursor), `view` mode (100 a page, with a cursor), or `sql` mode | SQL mode has a shared workspace quota on non-Business plans, so rebuild uses `view` mode with paging |
-
-Not used: any Notion API token. The scripts never call Notion.
+Notion was removed from the pack. Nothing in the code calls it, no config key refers to it, and nothing needs verifying.
+Daily and weekly reports are now local files (`trader-report/report.py`, saved in `trader/reports/`).
 
 ## 9. Yahoo Finance for NSE (.NS)
 
@@ -264,7 +249,7 @@ None of these could be fetched from the build sandbox. Every fixture for them is
 
 ## 13. What the whole build did NOT test against reality
 
-No real NSE, Yahoo, Moneycontrol, Zerodha or Notion call was made by the tests. Real calls happen first on your machine. The first things to look at: `scan.py universe` (did the CSVs download and parse?), one `entry.py check` on a real symbol after 09:35, `news.py` (which of the three feeds answered?), the first Notion sync (did the database schema create?), and `alerts.py quote RELIANCE` against Kite's price. `tests/capture.py` saves real Yahoo bars so the synthetic fixtures can be replaced.
+No real NSE, Yahoo, Moneycontrol, Zerodha, Dhan or FYERS call was made by the tests. Real calls happen first on your machine. The first things to look at: `scan.py universe` (did the CSVs download and parse?), one `entry.py check` on a real symbol after 09:35, `news.py` (which of the three feeds answered?), `report.py daily` (does the report read right?), and `alerts.py quote RELIANCE` against Kite's price. `tests/capture.py` saves real Yahoo bars so the synthetic fixtures can be replaced.
 
 ## 14. Protection data, expiry day and the Kite order-read figures (database edition, 2026-10-29)
 
@@ -286,6 +271,43 @@ Searched on 2026-10-29. The sandbox could not open any of these sites, so none w
 | Contract-note charges | Entered by hand: `kite.py set-charges`. No contract-note parser is built. | Not built. |
 | Cover orders and GTT for MIS | Still unverified (section 2). The live design is entry, a resting SL-M stop after the fill, and a new order for the target or flat-by. A target is not a resting order. | Different from "CO or GTT OCO" in your spec; see docs/AUDIT.md. |
 
+## 15. Dhan (chosen as the broker instead of Zerodha, 2026-11-16)
+
+Found by web search and by reading three GitHub pages. The sandbox could not open `dhan.co`, `dhanhq.co`, `docs.dhanhq.co` or `medium.com`, so **nothing was read from Dhan's own pages**. Status words as in the legend at the top. Marked RECHECK-AT-DHAN where you must check before `broker: dhan` goes live. The full analysis is [docs/DHAN.md](docs/DHAN.md).
+
+| item | finding | status |
+| --- | --- | --- |
+| Official MCP server | Dhan's blog and docs describe a first-party MCP server (holdings, positions, funds, quotes, depth, option chains, margin, and placing, modifying and cancelling orders including super orders). A walkthrough gives `https://mcp.dhan.co/mcp` and says every session asks for explicit consent. Sources: dhan.co/blog/trading-strategies/why-trade-intraday-with-claude-try-dhan-mcp-skills, docs.dhanhq.co/mcp/tools/orders | SECONDARY (search snippets). RECHECK-AT-DHAN |
+| Official MCP tool names | Not found; the docs page `mcp/tools/orders` exists but could not be opened. Community servers use `place_order`, `place_slice_order`, `get_orders`, `get_fund_limits`, `get_positions`, `get_market_ltp`, but they are not Dhan's. The adapter's defaults are guesses and are overridden by `dhan_tools` in the config | **UNVERIFIED / RECHECK-AT-DHAN** |
+| Order APIs need a static IP | DhanHQ release notes: static IP required for all order APIs (normal, super, forever); data calls said to work without. Error `DH-911` for an invalid IP. Whether the hosted MCP route changes this is unknown | SECONDARY. RECHECK-AT-DHAN |
+| Order rate limit | 10 orders per second (support page); a third-party review also lists 250 a minute and 7,000 a day, not confirmed | SECONDARY |
+| Access token | valid 24 hours, renewable; API key valid 12 months with a daily login (authentication docs) | SECONDARY |
+| Instruments | orders use a numeric `securityId` and `exchangeSegment`; `NSE_EQ` for NSE equity (not confirmed from the REST page; the SDK page shows `NSE`). Source file `images.dhan.co/api-data/api-scrip-master.csv`. Duplicate symbols exist (a bond named IRFC-EQ). `dhan.py securities` assumes columns containing `security`+`id`, `trading`+`symbol`, `exch`, `series`, `segment`, `instrument` and drops ambiguous symbols | SECONDARY for the file, **UNVERIFIED for column names and `NSE_EQ`** |
+| Product and order types | product `INTRADAY` (also CNC, MARGIN, MTF); order types LIMIT, MARKET, STOP_LOSS, STOP_LOSS_MARKET; `STOP_LOSS` needs price and trigger price; API market orders are converted to limit orders with market price protection | SECONDARY (dhanhq-skills orders.md) |
+| Super order | one request with entry, target and stop-loss legs and an optional trailing stop; fields `targetPrice`, `stopLossPrice`, `trailingJump`; legs `ENTRY_LEG`, `TARGET_LEG`, `STOP_LOSS_LEG`; entry modifiable only while PENDING or PART_TRADED; untriggered intraday orders are cancelled automatically; a GitHub issue reports validation quirks (market super orders, partial leg sets). Whether cancelling `ENTRY_LEG` cancels the other legs once the entry has traded is not stated | SECONDARY. RECHECK-AT-DHAN |
+| Order and trade fields | order list: `orderId`, `correlationId`, `orderStatus`, `transactionType`, `exchangeSegment`, `productType`, `remainingQuantity`, `averageTradedPrice`, `filledQty`; statuses TRANSIT, PENDING, REJECTED, CANCELLED, TRADED, EXPIRED; one forum thread names the trade-book average `avgTradePrice`; placement reply `{"status": "success", "data": {"orderId", "orderStatus"}}`; the funds field is spelled `availabelBalance` in Dhan's API (to be confirmed). `tradingSymbol`, `netQty`, `tradedQuantity`, `tradedPrice` for trades and positions are from memory. The readers accept several spellings | SECONDARY, partly conflicting. **UNVERIFIED for the rest. RECHECK-AT-DHAN** |
+| Auto square-off | Dhan FAQ: 3:10 PM for equity intraday (before the closing auction); another Dhan page: from 3:18 PM; a third-party page: 3:20 PM. Auto square-off charge ₹20 per order + GST | SECONDARY, conflicting. `flat_by` 15:00 is earlier than all three |
+| Charges | intraday brokerage ₹20 or 0.03% per order, whichever is lower; NSE exchange charge 0.00297% on the pricing page (matches `exchange_pct`); STT, SEBI fee and stamp duty are statutory | SECONDARY (dhan.co/pricing snippet). RECHECK-AT-DHAN |
+| MIS list and leverage | Dhan margin and MIS eligibility rules were not read. The pack never uses leverage | UNVERIFIED |
+| Sizing of one live trade | one super order = one ticket, one risk check, one typed yes, one Allow once card; leaving early is cancel then sell, each with its own yes | Design (docs/DHAN.md) |
+
+## 16. FYERS and TradingView (analysed 2026-11-16, at your request)
+
+Found by web search and one GitHub page; `fyers.in` and `tradingview.com` could not be opened. The full analysis is [docs/FYERS.md](docs/FYERS.md). Marked RECHECK-AT-FYERS where you must check before `broker: fyers` goes live.
+
+| item | finding | status |
+| --- | --- | --- |
+| Official MCP server | docs list `mcp.fyers.in/mcp` with place, modify, cancel, basket and scheduled orders (fyers.in/api-docs/ai/mcp); an older community post says order tools were not available | SECONDARY, conflicting. RECHECK-AT-FYERS |
+| Tool names and result fields | not found; `fyers_tools` takes the real names | **UNVERIFIED. RECHECK-AT-FYERS** |
+| Symbols | `NSE:SBIN-EQ` | SECONDARY |
+| BO and CO | the FYERS Go SDK README: deprecated and rejected by the API; community reports mixed. Not used | SECONDARY, conflicting |
+| Attached TP/SL | optional `takeProfit`, `stopLoss`, `legType` on INTRADAY orders (points or percent). Not used | SECONDARY, unverified |
+| Order types and sides | type 1 limit, 2 market, 3 SL-M, 4 SL-L; side 1 buy, -1 sell | SECONDARY |
+| Order book fields and statuses | 1 cancelled and 2 traded confirmed on the GTT page; 4 transit, 5 rejected, 6 pending, `tradedPrice`, `filledQty`, `netQty`, `fund_limit`, `equityAmount`, `lp` from memory | UNVERIFIED. RECHECK-AT-FYERS |
+| Static IP, rate limits, login, charges | not read | UNVERIFIED |
+| TradingView with FYERS | FYERS is a TradingView broker partner; you can trade real orders from TradingView's panel | SECONDARY |
+| TradingView paper trading | exists; a community post says NSE symbols are blocked there; no API found to place or read paper orders; no export format found | SECONDARY / UNVERIFIED. **Not integrated** |
+
 ## Items to re-check when you connect Kite (RECHECK-AT-KITE)
 
 1. Whether the hosted `mcp.kite.trade` exposes `place_order` / `modify_order` / `cancel_order` (assumed: no).
@@ -304,3 +326,30 @@ Searched on 2026-10-29. The sandbox could not open any of these sites, so none w
     the cash check, `kite.py check` and `kite.py reconcile` read them.
 13. Whether the Kite MCP server you use returns order, trade and position fields with the names the adapter reads
     (`order_id`, `status`, `average_price`, `filled_quantity`, `tradingsymbol`, `transaction_type`, `quantity`).
+
+## Items to re-check when you connect Dhan (RECHECK-AT-DHAN)
+
+1. The real tool list of Dhan's MCP connector and which tools place, modify, cancel or exit orders, including super orders and forever orders; then put the real names in `dhan_tools` in your config.
+2. Whether Dhan's order APIs need a registered static IP on your route, and that it is registered.
+3. How long the login lasts and how you connect each morning.
+4. That a super order (entry, stop-loss and target) works for NSE equity INTRADAY, and what cancelling it does to its legs once the entry has traded.
+5. That a LIMIT super-order entry fills as documented (API market orders become limit orders with protection).
+6. The numeric `securityId` for each symbol you trade, from Dhan's instrument list, and the real column names of that file.
+7. The real field names in the order, trade, position, funds and last-price results (the readers accept several spellings; confirm which one is real).
+8. Dhan's intraday auto square-off time against your `flat_by`.
+9. Every rate in the charges table against dhan.co/pricing on the day.
+10. Tick size per symbol against the NSE band table.
+11. Whether Yahoo's `.NS` quotes match Dhan's prices closely enough to size trades on.
+
+## Items to re-check when you connect FYERS (RECHECK-AT-FYERS)
+
+1. Whether FYERS's official MCP server places orders for your account today, and its real tool list; then fill `fyers_tools`.
+2. Whether order APIs need a registered static IP on your route.
+3. How long the login lasts and how you connect each morning.
+4. That a plain INTRADAY market order and an SL-M stop order (type 3 with `stopPrice`) are accepted for NSE equity; else set `"stop_order_type": "SL"`.
+5. The real field names and status codes in the orders, trades, positions, funds and quotes results.
+6. That the returned order tag carries your `orderTag` (the duplicate guard reads it, ignoring a leading `N:`).
+7. FYERS's intraday auto square-off time against your `flat_by`.
+8. Every rate in the charges table against FYERS's pricing page.
+9. Tick size per symbol against the NSE band table.
+10. Whether Yahoo's `.NS` quotes match FYERS's prices closely enough to size trades on.

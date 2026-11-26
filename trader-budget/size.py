@@ -56,7 +56,12 @@ import guards  # noqa: E402  (shared guard rules; trader-risk, -scanner and -con
 # Your limits (the request of 2026-10-29). trader/config.json overrides them; the tools never write them.
 DEFAULTS = {
     "mode": "paper",
+    "broker": "dhan",
+    "dhan_enabled": False,
     "kite_enabled": False,
+    "dhan_tools": {},
+    "fyers_enabled": False,
+    "fyers_tools": {},
     "capital_inr": 100000,
     "max_loss_per_trade_inr": 500,
     "max_daily_loss_inr": 1500,
@@ -608,7 +613,6 @@ def cmd_init(a):
     doc["limits_pct"] = dict(guards.DEFAULT_PCT)
     doc.update(guards.derive_inr(doc["capital_inr"], doc["limits_pct"]))
     doc["charges"] = dict(chg.DEFAULT_RATES)
-    doc["notion"] = {"parent_page_id": None, "page_id": None, "databases": {}}
     with open(a.config, "w", encoding="utf-8") as fh:
         json.dump(doc, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
@@ -704,4 +708,9 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):      # Windows consoles default to a code page that cannot print the rupee sign
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     sys.exit(main())

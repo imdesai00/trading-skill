@@ -353,6 +353,18 @@ def status_of(order, risk, state, today, mode="paper"):
     if rv.get("verdict") != "PASS":
         return False, "BLOCKED by trader-risk: " + "; ".join(rv.get("reasons", [])), rv
     rec = latest(state, fp, today)
+    if rec and rec.get("status") == "voided":
+        # the live price moved after your yes: it is asked again, but only after trader-risk has run AGAIN
+        try:
+            void_at = datetime.datetime.fromisoformat(rec["at"])
+            void_utc = (void_at - void_at.utcoffset()).replace(tzinfo=None)
+            checked = datetime.datetime.strptime(str((risk or {}).get("checked_at")), "%Y-%m-%dT%H:%M:%SZ")
+        except (KeyError, TypeError, ValueError):
+            return False, "NOT READY: the yes was voided because the price moved; run trader-risk check.py again", rv
+        if checked <= void_utc:
+            return False, ("NOT READY: your yes was voided at %s because the live price moved. Run trader-risk check.py "
+                           "again, then say yes again." % rec.get("at")), rv
+        return True, "READY again: the price moved, trader-risk was run again and PASSED; waiting for a new yes", rv
     if rec:
         st = rec.get("status")
         if st == "approved":
@@ -367,6 +379,27 @@ def kind_of(order, rv):
     return "entry" if str(order.get("side", "")).lower() == "buy" else "exit"
 
 
+def broker_of(cfg):
+    """Which live broker the config names: dhan, fyers or kite. Without a "broker" key it is kite (the older behaviour)."""
+    b = str((cfg or {}).get("broker") or "kite").strip().lower()
+    return b if b in ("dhan", "fyers") else "kite"
+
+
+BROKER_NAMES = {"dhan": "Dhan", "fyers": "FYERS", "kite": "Zerodha Kite"}
+
+
+def adapter_module(cfg):
+    b = broker_of(cfg)
+    if b == "dhan":
+        import dhan
+        return dhan
+    if b == "fyers":
+        import fyers
+        return fyers
+    import kite
+    return kite
+
+
 def mode_of(cfg):
     return "live" if str((cfg or {}).get("mode") or "paper").lower() == "live" else "paper"
 
@@ -376,7 +409,8 @@ def mode_of(cfg):
 def render(order, idx, total, cfg, risk, state, today):
     mode = mode_of(cfg)
     ready, label, rv = status_of(order, risk, state, today, mode)
-    head = "PAPER: no broker is contacted" if mode == "paper" else "LIVE ACCOUNT, REAL MONEY, Zerodha Kite"
+    head = "PAPER: no broker is contacted" if mode == "paper" else (
+        "LIVE ACCOUNT, REAL MONEY, %s" % BROKER_NAMES[broker_of(cfg)])
     lines = ["ORDER %d of %d, %s" % (idx, total, head)]
     for part in plain_parts(order):
         lines.append("  " + part)
@@ -387,7 +421,7 @@ def render(order, idx, total, cfg, risk, state, today):
         lines.append("  note: " + w)
     if mode == "live":
         call = live_call(order, cfg)
-        lines.append("  Claude will call the Kite %s tool with exactly:" % call["tool"])
+        lines.append("  Claude will call the %s %s tool with exactly:" % (BROKER_NAMES[broker_of(cfg)].split()[-1], call["tool"]))
         for l in json.dumps(call["arguments"], indent=2).splitlines():
             lines.append("    " + l)
         if order.get("side") == "buy":
@@ -405,8 +439,7 @@ def render(order, idx, total, cfg, risk, state, today):
 
 def live_call(order, cfg):
     """The exact Kite call for this order, built by the adapter from the order's own fields."""
-    import kite
-    return kite.build_call(order, cfg)
+    return adapter_module(cfg).build_call(order, cfg)
 
 
 def ticket_json(order, idx, cfg, risk, state, today):
@@ -493,8 +526,8 @@ def cmd_approve(a):
     if (a.why or "").strip():
         rec["why"] = a.why.strip()
     if mode == "live":
-        import kite
-        rec["payload_hash"] = kite.payload_hash(kite.build_call(order, cfg))
+        mod = adapter_module(cfg)
+        rec["payload_hash"] = mod.payload_hash(mod.build_call(order, cfg))
     state.setdefault("orders", []).append(rec)
     dbp = db.default_path(a.state)
     if db.exists(dbp):
@@ -505,10 +538,12 @@ def cmd_approve(a):
         print("Paper mode: no broker is contacted. Record the paper trade: python3 trader-broker/paper.py open "
               "--index %d" % a.index)
     else:
-        print("Now run kite.py prepare --index %d --open-orders <the saved get_orders result>: it checks every gate "
-              "and prints the one Kite call to make." % a.index)
-        print("Claude's card then shows Allow once / Deny. Afterwards: kite.py record --index %d --order-id ID "
-              "(or --failed / --denied)." % a.index)
+        bro = broker_of(cfg)
+        print("Now run %s.py prepare --index %d --open-orders <the saved get_orders result> --ltp <the saved last-price "
+              "result> --margins <the saved funds result>: it checks every gate and prints the one %s call to make."
+              % (bro, a.index, BROKER_NAMES[bro].split()[-1]))
+        print("Claude's card then shows Allow once / Deny. Afterwards: %s.py record --index %d --order-id ID "
+              "(or --failed / --denied)." % (bro, a.index))
     return 0
 
 
@@ -531,8 +566,8 @@ def cmd_result(a):
     orders, cfg, risk, state, today, now = _load(a)
     if mode_of(cfg) != "live":
         raise TicketError("result is for live orders only; paper trades are recorded by paper.py")
-    raise TicketError("live results are recorded with kite.py record (it also updates the live ledger and uses "
-                      "the yes up): kite.py record --index %d --order-id ID" % a.index)
+    raise TicketError("live results are recorded with %s.py record (it also updates the live ledger and uses "
+                      "the yes up): %s.py record --index %d --order-id ID" % (broker_of(cfg), broker_of(cfg), a.index))
 
 
 def cmd_flatten(a):
@@ -644,4 +679,9 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):      # Windows consoles default to a code page that cannot print the rupee sign
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     sys.exit(main())

@@ -40,6 +40,19 @@ class PriceAndMargin(LiveBase):
         self.assertIn("voided", str(e.exception))
         self.assertEqual(sum(1 for c in self.fake.calls if c[0] == "place_order"), 0)
 
+    def test_after_a_void_the_same_order_can_be_asked_again_but_only_after_a_new_risk_check(self):
+        self.approve(ENTRY)
+        with self.assertRaises(kite.KiteError):
+            self.prepare(ltp={"NSE:SYNTHA": {"last_price": 1421.0}}, margins=self.margins())
+        code, out, _ = self.run_cli(ticket, ["show", "--now", NOW + ":30"])
+        self.assertIn("NOT READY: your yes was voided", out)
+        code, code2, _, out = self.approve(ENTRY, NOW)                  # the risk check is not newer than the void
+        self.assertIn("not ready", out)
+        code, code2, _, out = self.approve(ENTRY, "2026-10-30 09:53")   # a new risk check, then a new yes
+        self.assertEqual((code, code2), (0, 0), out)
+        call = self.adapter("2026-10-30 09:53").prepare(ENTRY, [], {"NSE:SYNTHA": {"last_price": 1416.5}}, self.margins())
+        self.assertEqual(call["tool"], "place_order")
+
     def test_the_edge_of_the_band_and_a_move_down(self):
         self.approve(ENTRY)
         self.prepare(ltp={"NSE:SYNTHA": {"last_price": 1420.2}}, margins=self.margins())       # +0.2972 %: inside

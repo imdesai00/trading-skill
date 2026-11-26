@@ -7,7 +7,7 @@ routine places a real order. Paper mode books a simulated trade only after a ris
 
 1. **Morning check**: `control.py morning`. Read it. It tells you whether NSE is open, your mode, balance, the week so far, how much of the daily and
    weekly limits are used, any pause or kill switch, events today, results due today, India VIX, whether the protection files are loaded, when the last
-   backup was, and whether Notion is up to date.
+   backup was, and whether the database check passed.
 2. **Load the daily files** ([DATA_FILES.md](DATA_FILES.md)): `scan.py protect --asm ... --gsm ... --mis ... --bands ...` and
    `scan.py market --fetch` (or type the VIX in).
 3. **News on your watchlist**: `news.py`. Look for RESULTS TODAY. A company reporting results today is a half-size day for that stock.
@@ -42,24 +42,22 @@ Do nothing. The first 15 minutes make the opening range; no entries are allowed 
 17. `paper.py reconcile` replays the day's bars, decides which of stop, target and flat-by came first (a tie counts as the stop), applies the full
     charges, fills the skipped signals' "what would have happened", and makes a database backup.
 18. **Claude asks: "How did you feel about it?"** `paper.py feel --trade ID --text "..."`.
-19. **Notion**: `journal.py queue`, then Claude writes each waiting row with the Notion connector and marks it sent. Claude reads the rows back and runs
-    `journal.py verify` so you see "Everything agrees" or the mismatch.
-20. `journal.py daily` prints the day in plain words.
+19. `report.py daily` prints the day in plain words and saves it in `trader/reports/`.
 
 ## Every Friday
 
-21. `journal.py weekly`: trades, win rate, average R, expectancy after charges, charges paid, best and worst trade, results by setup and against the
+20. `report.py weekly`: trades, win rate, average R, expectancy after charges, charges paid, best and worst trade, results by setup and against the
     time machine's odds, skipped signals compared with trades taken, limits hit, balance against your starting capital. Paper and live are separate.
-22. `db.py check` and `db.py backup`.
+21. `db.py check` and `db.py backup`.
 
 ## When something is not routine
 
 - **Change capital or a limit**: ask Claude ("change capital to ₹1,50,000"). It shows old against new and waits for your yes. See [SAFETY.md](SAFETY.md).
 - **Take a break**: "pause trading until 6 November" (both modes) and "resume trading".
 - **Stop everything now**: "kill switch". A file `trader/STOP` blocks every new order until you remove it.
-- **Lost files**: `db.py restore` from `trader/backups/`, or `journal.py rebuild --into-db` from Notion. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+- **Lost files**: `db.py restore` from `trader/backups/`. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ## What a good week looks like
 
-Few trades, several refusals, every trade with a written reason, every loss inside ₹500, the database check passing, and Notion matching. Profit is not the
+Few trades, several refusals, every trade with a written reason, every loss inside ₹500, the database check passing, and the check passing. Profit is not the
 test in the first four weeks.

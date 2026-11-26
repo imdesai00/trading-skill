@@ -56,7 +56,7 @@ class Schema(Base):
         names = {r[0] for r in self.q("SELECT name FROM sqlite_master WHERE type='table'")}
         for t in ("account", "capital_changes", "positions", "orders", "approvals", "fills", "trades",
                   "skipped_signals", "risk_verdicts", "daily_summary", "weekly_reports", "alerts", "news_items",
-                  "scans", "pauses", "config_history", "notion_outbox", "schema_version"):
+                  "scans", "pauses", "config_history", "schema_version"):
             self.assertIn(t, names)
 
     def test_init_twice_is_safe(self):
@@ -273,16 +273,11 @@ class AuditRows(Base):
             db.log_row(self.path, "orders", row)
 
 
-class Outbox(Base):
-    def test_round_trip(self):
-        rows = [{"key": "paper_trades:PT-1", "db": "paper_trades", "id": "PT-1", "hash": "h1", "props": {"a": 1},
-                 "notion_page_id": None, "sent_hash": None, "queued_at": "t0"}]
-        db.save_outbox(self.path, rows)
-        rows[0].update(notion_page_id="pg", sent_hash="h1", sent_at="t1")
-        db.save_outbox(self.path, rows)
-        got = db.load_outbox(self.path)
-        self.assertEqual(len(got), 1)
-        self.assertEqual((got[0]["notion_page_id"], got[0]["sent_hash"], got[0]["props"]), ("pg", "h1", {"a": 1}))
+class NoNotion(Base):
+    def test_there_is_no_notion_table_or_outbox_code(self):
+        names = {r[0] for r in self.q("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertNotIn("notion_outbox", names)
+        self.assertFalse(hasattr(db, "save_outbox") or hasattr(db, "load_outbox"))
 
 
 class BackupRestore(Base):

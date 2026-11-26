@@ -4,12 +4,15 @@
 | --- | --- |
 | **NSE** | National Stock Exchange of India. This pack trades NSE cash shares only |
 | **cash equity** | ordinary shares (not futures, options, currency or commodities) |
-| **intraday / MIS** | Margin Intraday Square-off: you must close the position the same day. Zerodha closes any left open around 15:12 to 15:25. This pack never uses extra margin: leverage is off |
+| **intraday / MIS** | Margin Intraday Square-off: you must close the position the same day. The broker closes any left open (Dhan's pages say about 3:10 to 3:20 PM; Zerodha about 15:12 to 15:25). This pack never uses extra margin: leverage is off |
 | **long** | you buy first and sell later. Shorting (selling first) is off |
 | **IST** | India Standard Time, UTC+05:30, with no daylight saving |
 | **paper trading** | practising with pretend money. Fills are simulated from real prices, with slippage and full charges |
-| **live trading** | real orders at Zerodha Kite with real money |
-| **Zerodha Kite / Kite Connect / Kite MCP** | Zerodha's trading app, its programming interface, and the connector that lets Claude call it |
+| **live trading** | real orders at your broker (Dhan) with real money |
+| **Dhan / DhanHQ / Dhan MCP** | the broker, its programming interface, and the connector that lets Claude call it |
+| **Zerodha Kite / Kite Connect / Kite MCP** | the same three things for Zerodha, kept as an alternative route |
+| **super order** | one Dhan order that holds three legs: the entry, a target and a stop-loss. When one exit leg fills the other is cancelled |
+| **securityId** | the number Dhan uses instead of a stock symbol. `dhan.py securities` builds the map from Dhan's instrument list |
 | **ORB (opening-range breakout)** | the first 15 minutes (09:15 to 09:30) give a high and a low. A close above the high is the breakout |
 | **stop / stop-loss** | the price at which you give up on a trade and sell. The loss at the stop is your maximum planned loss |
 | **target** | the price at which you plan to take profit |
@@ -34,8 +37,7 @@
 | **contract note** | the broker's official statement of your trades and exact charges |
 | **hash chain** | each database row stores a code made from the row before it, so changing or removing a row in the middle is detectable |
 | **append-only** | rows can be added but not changed or deleted. Corrections are new rows |
-| **outbox** | the waiting list of rows to be written to Notion |
 | **kill switch** | the file `trader/STOP`: while it exists, no new order can be made |
-| **Allow once** | Claude's own permission card that appears before a Kite order tool runs |
+| **Allow once** | Claude's own permission card that appears before a broker order tool runs |
 | **TOTP** | the six-digit code from an authenticator app, used for two-factor login. Never share it |
 | **speculative business income** | the usual tax treatment of intraday equity trading in India. Not tax advice |

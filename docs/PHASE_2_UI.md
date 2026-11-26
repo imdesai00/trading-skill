@@ -14,7 +14,7 @@ It waits for Phase 1 because a dashboard built on feeds that have never run on r
 | --- | --- |
 | balance, capital, baseline, today's and this week's P&L | approve, place, modify, cancel or close any order |
 | trades today, wins and losses, charges, limits used as bars (daily, weekly, drawdown, trades, open positions) | changing capital, limits, `mode` or `kite_enabled` |
-| pause or kill-switch banner, events, India VIX, results today, protection-file status, Notion sync status, database health | the kill switch button (use chat or the `STOP` file; see "Open questions") |
+| pause or kill-switch banner, events, India VIX, results today, protection-file status, report status, database health | the kill switch button (use chat or the `STOP` file; see "Open questions") |
 | trades table (entry, stop, target, exit, charges, net, R) and skipped signals with what would have happened | anything for live mode that needs Claude's Allow once card |
 | equity curve (balance after each trade) | scheduled or automatic actions |
 | price chart for one symbol with entry, stop and target lines | |
@@ -37,7 +37,7 @@ The planner uses the same sizing and risk code as the real tools, so the numbers
 2. **Trades**: today and history, filter by mode, symbol and date. A click opens a trade with its chart, your "why" and "how I felt", and the order events.
 3. **Planner**: the what-if form, with a chart of entry, stop and target.
 4. **Watchlist**: the scanner's hits and your own list.
-5. **Record**: database check result, last backup, discrepancies (live), Notion sync status.
+5. **Record**: database check result, last backup, discrepancies (live), latest report.
 
 Paper and live are always shown separately, never summed.
 

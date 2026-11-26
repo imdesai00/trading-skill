@@ -9,7 +9,7 @@ from _load import ROOT
 # the India day-trading pack: thirteen skill folders
 SKILLS = ["trader-scanner", "trader-news", "trader-entry", "trader-exit", "trader-timemachine",
           "trader-risk", "trader-budget", "trader-broker", "trader-alerts", "trader-analyst",
-          "trader-insider", "trader-journal", "trader-golive", "trader-db", "trader-control"]
+          "trader-insider", "trader-report", "trader-golive", "trader-db", "trader-control"]
 ABOUT = ("15 Claude skills for NSE day trading: scan charts, track news, time every entry and exit, replay every "
          "outcome, and paper trade first. Longs only, no leverage, your yes on every order.")
 # skills on the way to an order carry the safety block

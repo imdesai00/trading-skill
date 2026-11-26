@@ -1,5 +1,9 @@
 # Audit: the build against your full specification
 
+> **Update 2026-11-16 (Notion removed):** every Notion row below is history. Notion and the `the old journal script` outbox were removed; `trader-journal` became `trader-report` (`report.py daily/weekly`, local Markdown files). Backups and exports are the second copy now.
+
+> **Update 2026-11-16:** the live broker is now Dhan, not Zerodha. Every "Kite" row below describes the Zerodha adapter, which is kept as an alternative; the Dhan adapter, its differences and what is unverified about Dhan are in [DHAN.md](DHAN.md). The gaps listed under "What we will miss" still apply, with one change: a Dhan super order gives a resting target and a stop that exists from the first fill, which the Zerodha design could not.
+
 Date of this audit: 2026-10-29. What was checked: every section of the specification you gave, against the code in this
 repository (15 skill folders, about 20,000 lines of Python, 495 passing tests). "Done" means built and covered by an offline
 test. Almost nothing here has touched real NSE, Yahoo, Moneycontrol, Zerodha or Notion: the sandbox it was built in could not
@@ -18,7 +22,7 @@ reach them. That is the first thing to know, and it is repeated under "What we w
 | trader-risk | check.py, guards.py, charges.py, db.py | PASS or BLOCK on the exact order | `state/risk.json`, risk_verdicts table |
 | trader-broker | ticket.py, paper.py, kite.py, charges.py, db.py | the ticket and your yes, the paper broker, the Kite adapter | `state/broker.json`, `state/paper.json`, `state/live.json`, orders, approvals, fills, trades tables |
 | trader-alerts | alerts.py | NSE clock, quotes, alerts | `state/alerts.json`, `trader/prices.json`, alerts table |
-| trader-journal | journal.py, db.py | the Notion outbox, verify, rebuild | notion_outbox table, nine Notion databases |
+| trader-journal | the old journal script, db.py | the Notion outbox, verify, rebuild | notion_outbox table, nine Notion databases |
 | trader-db | db.py | the database: check, backup, restore, export, migrate | `trader/trader.db`, `trader/backups/`, `trader/exports/` |
 | trader-control | control.py, db.py, guards.py | capital, limits, pause, kill switch, morning check | `trader/config.json`, `trader/STOP`, capital_changes, pauses, config_history |
 | trader-golive | golive.py, db.py | honest readiness report, go-live steps | reads the database |
@@ -130,7 +134,7 @@ Legend: **Done**, **Different** (built, but not as written; the reason is given)
 | item | status |
 | --- | --- |
 | Notion setup asks for the parent page; nine databases; IDs saved in the config | Done (needs your page name) |
-| Sync only through the outbox; ID-matched updates; counts and totals compared after each sync | Done (`journal.py verify`) |
+| Sync only through the outbox; ID-matched updates; counts and totals compared after each sync | Done (the old Notion verify) |
 | Rebuild both ways | Done (`rebuild --into-db`, `requeue`) |
 | Weekly report, paper and live separately | Done |
 | Capital change, other limits (show, confirm, record), hand-edit detection | Done (new) |
@@ -176,6 +180,6 @@ Legend: **Done**, **Different** (built, but not as written; the reason is given)
 1. On your machine: `python3 trader-budget/size.py init`, `db.py check`, then `scan.py universe`. Fix anything that fails and tell me what it said.
 2. Export the four protection files each morning for a week and see how long it takes. If it is too much, tell me, and I will look at what
    can be fetched without scraping tricks.
-3. Name the Notion page and run the Notion setup; read the first sync back with `journal.py verify`.
+3. Name the Notion page and run the Notion setup; read the first sync back with the old Notion verify.
 4. Paper trade for four weeks (about 20 trading days, at least 40 trades for a review).
 5. `golive.py check`, then decide for yourself. Before any live day, work through VERIFY.md "Items to re-check when you connect Kite".

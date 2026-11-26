@@ -4,15 +4,15 @@ This is the single page to read first. It tells you what to say to Claude, what 
 
 ## The idea in four sentences
 
-You talk to Claude in plain words ("run the morning check", "scan for breakouts"). Claude runs the small Python tools in this pack and explains the results. **Nothing places an order unless a risk check passes and you type a plain "yes" for that one order.** For the first four weeks you only practise on paper: a simulated account, kept in a local database and mirrored in Notion. Real money (Zerodha Kite) is a separate decision you make yourself, much later.
+You talk to Claude in plain words ("run the morning check", "scan for breakouts"). Claude runs the small Python tools in this pack and explains the results. **Nothing places an order unless a risk check passes and you type a plain "yes" for that one order.** For the first four weeks you only practise on paper: a simulated account, kept in a local database. Real money (Zerodha Kite) is a separate decision you make yourself, much later.
 
 ## Part 1: set up once (an afternoon)
 
 1. Make an empty folder (for example `~/trading`) and start Claude Code, Cowork or Claude Desktop in it. Add the skills ([GETTING_STARTED.md](GETTING_STARTED.md), step 2).
 2. Say: **"Create my config and database."** Claude runs `size.py init`. You now have your limits for a ₹1,00,000 account: max loss ₹500 a trade, ₹1,500 a day, ₹4,000 a week, pause at ₹8,000 below your start, 3 trades a day, 1 position at a time.
 3. Say: **"Check the database."** It should say the database is intact.
-4. Connect Notion in Claude's Connectors screen, then say: **"Set up the Notion journal."** Claude asks which Notion page to use. Name one. Never give Claude or any tool a Notion token.
-5. Turn on Zerodha's TOTP two-factor login now, and never share a Kite key, password or code with anyone, including Claude.
+4. Reports need no setup: they are written from the database.
+5. Turn on two-factor login (TOTP) at your broker (Dhan) now, and never share a broker key, password or code with anyone, including Claude.
 
 ## Part 2: every trading morning (before 09:15)
 
@@ -20,7 +20,7 @@ Say these one at a time and read the answers:
 
 | you say | what happens |
 | --- | --- |
-| "Run the morning check." | Market open or closed, mode (PAPER), balance, week so far, limits used, pause or kill switch, events, VIX, whether Notion and the database are fine. |
+| "Run the morning check." | Market open or closed, mode (PAPER), balance, week so far, limits used, pause or kill switch, events, VIX, whether the database is fine. |
 | "Load today's protection files." | You give Claude the ASM/GSM list, the MIS list and the price bands you saved from NSE and Zerodha ([DATA_FILES.md](DATA_FILES.md)). Skipping this means the circuit, surveillance and MIS checks cannot run. |
 | "Get today's VIX and NIFTY gap." | Saves India VIX and the opening gap; a high VIX or a big gap makes the day half size. |
 | "News on my watchlist." | Headlines from Yahoo, NSE and Moneycontrol. **RESULTS TODAY** next to a stock means half size for it. |
@@ -42,7 +42,7 @@ Do not trade in the first 15 minutes. Then:
 9. Claude asks: "Place this order? Reply yes or no." Reply **yes** (or **no**) to that one order. "ok", "sure" and "yes to all" are not a yes. One yes covers one order.
 10. Claude books the paper trade. No broker was contacted.
 
-Expect most days to end at step 5 or 6. With ₹500 of risk and Zerodha's charges, many trades are not worth taking, and that is the pack working.
+Expect most days to end at step 5 or 6. With ₹500 of risk and the broker's charges, many trades are not worth taking, and that is the pack working.
 
 ## Part 4: while the trade is open
 
@@ -54,8 +54,7 @@ Expect most days to end at step 5 or 6. With ₹500 of risk and Zerodha's charge
 
 1. **"Reconcile today."** Claude replays the day's bars, decides whether the stop, the target or the flat-by time came first (if both in one bar, the stop wins), applies full charges, and makes a database backup.
 2. Claude asks: **"How did you feel about it?"** Answer honestly.
-3. **"Sync to Notion."** Claude writes each waiting row through the Notion connector, then reads Notion back and compares counts and totals with your database. You should see "Everything agrees".
-4. **"Show today's summary."** Plain words: trades, wins and losses, net after charges, balance, limits hit.
+3. **"Show today's summary."** Plain words: trades, wins and losses, net after charges, balance, limits hit.
 
 ## Part 6: every Friday
 
@@ -79,12 +78,12 @@ Expect most days to end at step 5 or 6. With ₹500 of risk and Zerodha's charge
 
 ## Going live (later, and only if you choose to)
 
-Read [GO_LIVE.md](GO_LIVE.md) first. In short: you connect Kite yourself, set every Kite order tool to "Needs approval", re-check the items in VERIFY.md, run the connection check each morning, and edit `"mode": "live"` and `"kite_enabled": true` in your config yourself. The first two live weeks run at half risk automatically. A live trade is three separate orders (entry, stop, exit), each needing a risk check, your typed yes and Claude's own Allow once card. No tool and no scheduled task can do any of that for you.
+Read [GO_LIVE.md](GO_LIVE.md) first. In short: you connect Dhan's connector yourself, set every order tool to "Needs approval", re-check the items in VERIFY.md, run the connection check each morning, and edit `"mode": "live"` and `"kite_enabled": true` in your config yourself. The first two live weeks run at half risk automatically. A live trade is three separate orders (entry, stop, exit), each needing a risk check, your typed yes and Claude's own Allow once card. No tool and no scheduled task can do any of that for you.
 
 ## What Claude will never do
 
 - Place an order without a risk PASS on that exact order and your typed yes.
-- Switch to live mode, or change `mode` or `kite_enabled`.
+- Switch to live mode, or change `mode`, `broker`, `dhan_enabled` or `kite_enabled`.
 - Change a limit or your capital without showing you and getting your yes.
 - Ask for, store or print a key, password, token or TOTP code.
 - Run anything by itself in the background.

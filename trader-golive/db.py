@@ -24,13 +24,13 @@ How it is built (and why):
     the one it replaces. The 'current' state is the newest version.
   - Every append-only row stores row_hash = sha256(previous row's hash + this row), so
     `db check` finds an edited or removed row in the middle of a chain. A truncated tail is not
-    detectable from inside the file: that is what the dated backups (and Notion) are for.
-  - positions, account, daily_summary, weekly_reports, alerts, news_items, scans and notion_outbox
+    detectable from inside the file: that is what the dated backups and your exports are for.
+  - positions, account, daily_summary, weekly_reports, alerts, news_items and scans
     are working tables that are meant to change (they can all be rebuilt from the append-only ones,
     except the logs).
   - Paper and live live in the same tables, told apart by the `mode` column. They are never mixed in a sum.
   - Every write is one transaction: all of it lands or none of it.
-Nothing here talks to Notion or a broker.
+Nothing here talks to a broker or to the network.
 """
 
 import argparse
@@ -78,8 +78,6 @@ SCHEMA = [
     "symbol TEXT, title TEXT, tags TEXT, link TEXT)",
     "CREATE TABLE IF NOT EXISTS scans (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, kind TEXT, "
     "universe TEXT, hits INTEGER, doc TEXT)",
-    "CREATE TABLE IF NOT EXISTS notion_outbox (key TEXT PRIMARY KEY, notion_db TEXT, row_id TEXT, doc TEXT NOT NULL, "
-    "hash TEXT, notion_page_id TEXT, sent_hash TEXT, queued_at TEXT, sent_at TEXT)",
     # append-only, hash-chained
     "CREATE TABLE IF NOT EXISTS capital_changes (" + _chain_cols(
         "change_id TEXT NOT NULL UNIQUE, at TEXT NOT NULL, mode TEXT NOT NULL, kind TEXT NOT NULL, "
@@ -300,7 +298,7 @@ def check(path=DEFAULT_DB):
     finally:
         conn.close()
     lines.append("Result: " + ("the database is intact." if ok else "PROBLEMS FOUND. Do not trade on this file; "
-                                "restore a backup (db.py restore) and compare with Notion."))
+                                "restore a backup (db.py restore) and compare it with your last export (db.py export)."))
     return ok, lines
 
 
@@ -635,33 +633,6 @@ def log_row(path, table, row):
         return cur.rowcount > 0
 
 
-def load_outbox(path):
-    conn = connect(path)
-    try:
-        rows = []
-        for r in conn.execute("SELECT * FROM notion_outbox ORDER BY queued_at, key"):
-            d = json.loads(r["doc"])
-            d.update(key=r["key"], hash=r["hash"], notion_page_id=r["notion_page_id"], sent_hash=r["sent_hash"],
-                     queued_at=r["queued_at"], sent_at=r["sent_at"])
-            rows.append(d)
-        return rows
-    finally:
-        conn.close()
-
-
-def save_outbox(path, rows):
-    with Tx(path) as conn:
-        for d in rows:
-            doc = {k: v for k, v in d.items() if k not in ("key", "hash", "notion_page_id", "sent_hash",
-                                                           "queued_at", "sent_at")}
-            conn.execute("INSERT INTO notion_outbox (key, notion_db, row_id, doc, hash, notion_page_id, sent_hash, "
-                         "queued_at, sent_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
-                         "doc=excluded.doc, hash=excluded.hash, notion_page_id=excluded.notion_page_id, "
-                         "sent_hash=excluded.sent_hash, sent_at=excluded.sent_at",
-                         (d["key"], d.get("db"), d.get("id"), _jd(doc), d.get("hash"), d.get("notion_page_id"),
-                          d.get("sent_hash"), d.get("queued_at"), d.get("sent_at")))
-
-
 # ---------------------------------------------------------------- migration from the JSON files
 
 def migrate(base="trader", path=None, now=None):
@@ -701,10 +672,6 @@ def migrate(base="trader", path=None, now=None):
     if risk.get("results"):
         n_rv = record_verdicts(path, risk.get("mode") or "paper", risk.get("date") or "", risk["results"], now)
     rep["risk verdicts"] = (len(risk.get("results", [])), n_rv)
-    box = rj("state", "notion_outbox.json") or {}
-    if box.get("rows"):
-        save_outbox(path, box["rows"])
-    rep["notion outbox rows"] = (len(box.get("rows", [])), len(box.get("rows", [])))
     if cfg:
         log_config(path, cfg, "initial", "imported by db.py migrate", now)
     return rep
@@ -714,7 +681,7 @@ def _counts(path):
     conn = connect(path)
     try:
         return {t: conn.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0]
-                for t in APPEND_ONLY + ["positions", "account", "notion_outbox"]}
+                for t in APPEND_ONLY + ["positions", "account"]}
     finally:
         conn.close()
 
@@ -730,7 +697,7 @@ def _approval_keys(path):
 # ---------------------------------------------------------------- export
 
 TABLES_FOR_EXPORT = APPEND_ONLY + ["account", "positions", "daily_summary", "weekly_reports", "alerts", "news_items",
-                                   "scans", "notion_outbox", "schema_version", "meta"]
+                                   "scans", "schema_version", "meta"]
 
 
 def export_csv(path, folder):
