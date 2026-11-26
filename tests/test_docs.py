@@ -6,7 +6,7 @@ import unittest
 from _load import ROOT
 
 DOCS = os.path.join(ROOT, "docs")
-FILES = ["README.md", "HOW_TO_USE.md", "GETTING_STARTED.md", "DAILY_ROUTINE.md", "SKILLS.md", "SAFETY.md", "CONFIG.md", "DATA_FILES.md",
+FILES = ["README.md", "HOW_TO_USE.md", "SETUP_NO_BROKER.md", "GETTING_STARTED.md", "DAILY_ROUTINE.md", "SKILLS.md", "SAFETY.md", "CONFIG.md", "DATA_FILES.md",
          "GO_LIVE.md", "ARCHITECTURE.md", "TROUBLESHOOTING.md", "GLOSSARY.md", "AUDIT.md", "ROADMAP.md", "PHASE_2_UI.md", "PHASE_3_DHAN.md", "DHAN.md", "FYERS.md"]
 
 

@@ -513,7 +513,7 @@ def cmd_morning(a):
     lines.append("News: last checked %s." % ((nw or {}).get("last_check") or "never"))
     for n in notes:
         lines.append("NOTE: " + n)
-    lines.append("Reminder: turn on Zerodha's TOTP two-factor login, and never share Kite keys, passwords or "
+    lines.append("Reminder: turn on two-factor login (TOTP) at your broker, and never share broker keys, passwords or "
                  "codes with anyone, including Claude.")
     print("\n".join(lines))
     return 0
@@ -576,4 +576,9 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):      # Windows consoles default to a code page that cannot print the rupee sign
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     sys.exit(main())

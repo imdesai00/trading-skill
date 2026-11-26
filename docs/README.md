@@ -6,6 +6,7 @@ Start here if you are new. Read the files in this order the first time; later, u
 | --- | --- |
 | [HOW_TO_USE.md](HOW_TO_USE.md) | **start here**: the whole thing on one page, with what to say to Claude |
 | [GETTING_STARTED.md](GETTING_STARTED.md) | you have just downloaded the pack and want it running in an afternoon |
+| [SETUP_NO_BROKER.md](SETUP_NO_BROKER.md) | **no broker account yet**: Windows setup, what a phone can do, and the one-month paper plan with a scorecard |
 | [DAILY_ROUTINE.md](DAILY_ROUTINE.md) | you want to know exactly what to do each trading day, and each Friday |
 | [SKILLS.md](SKILLS.md) | you want to know what each of the 15 skills does and its commands |
 | [SAFETY.md](SAFETY.md) | you want to know what stops a bad trade (and what does not) |
