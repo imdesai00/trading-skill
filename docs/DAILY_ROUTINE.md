@@ -23,7 +23,7 @@ Do nothing. The first 15 minutes make the opening range; no entries are allowed 
 
 7. `scan.py orb` lists stocks that closed above their first-15-minute high.
 8. Pick **one**. `entry.py check SYMBOL` says waiting, triggered or expired.
-9. If triggered: `exit.py plan --write` sets the stop and target on the NSE tick grid. Then `timemachine.py run --write` replays the rest of the
+9. If triggered: `exit.py plan --from trader/entry.json --target 3R --write` sets the stop and target on the NSE tick grid (use 3R: the default 2R is usually refused after charges). Then `timemachine.py run --write` replays the rest of the
    session 10,000 times (a reality check, not a prediction).
 10. `size.py --write` sizes the trade so the loss at the stop, with charges and slippage, stays inside your limit. If it says REFUSED, the answer is
     no. Log it with `paper.py skip --from-plan` so you can see what you skipped.
